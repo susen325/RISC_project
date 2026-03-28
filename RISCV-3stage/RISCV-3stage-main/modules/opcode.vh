@@ -2,6 +2,7 @@
 
 `define OPCODE      6:0
 `define FUNC3       14:12
+`define FUNC7       31:25
 `define SUBTYPE     30
 `define RD          11:7
 `define RS1         19:15
@@ -51,3 +52,17 @@ localparam  [ 2: 0] ADD     = 3'b000,    // inst[30] == 0: ADD, inst[31] == 1: S
                     SR      = 3'b101,    // inst[30] == 0: SRL, inst[31] == 1: SRA
                     OR      = 3'b110,
                     AND     = 3'b111;
+                    
+//********************************
+// RV32M Extension Additions
+
+localparam  [ 6: 0] M_EXT   = 7'b0000001; // FUNCT7 value for RV32M ops
+
+localparam  [ 2: 0] MUL     = 3'b000,
+                    MULH    = 3'b001,
+                    MULHSU  = 3'b010,
+                    MULHU   = 3'b011,
+                    DIV     = 3'b100,
+                    DIVU    = 3'b101,
+                    REM     = 3'b110,
+                    REMU    = 3'b111;
