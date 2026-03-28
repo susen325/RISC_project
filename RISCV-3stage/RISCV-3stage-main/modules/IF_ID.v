@@ -45,7 +45,10 @@ module IF_ID
     output [4:0]  dest_reg_sel_w,
     output [2:0]  alu_operation_w,
     output        illegal_inst_w,
-    output [31:0] instruction_o
+    output [31:0] instruction_o,
+
+     output        is_m_ext_w         // for m extension
+
 );
 
 //////////////// Including OPCODES ////////////////////////////
@@ -160,6 +163,11 @@ always @(*) begin
     endcase
 end
 
+//*********
+wire m_ext_inst = (instruction_i[`OPCODE] == ARITHR) && 
+                  (instruction_i[`FUNCT7] == M_EXT);
+
+
 // ----------------------------------------------------------------------------
 // ID -> EX Pipeline Register Instance
 // ----------------------------------------------------------------------------
@@ -212,7 +220,9 @@ id_ex_reg u_id_ex (
     .src2_sel_o          (src2_select_w),
     .dest_reg_sel_o      (dest_reg_sel_w),
     .alu_op_o            (alu_operation_w),
-    .illegal_inst_o      (illegal_inst_w)
+    .illegal_inst_o      (illegal_inst_w),
+
+    .is_m_ext_o           (is_m_ext_w)        // <--- ADD THIS
 );
 endmodule
 
@@ -244,6 +254,8 @@ module id_ex_reg (
     input  [2:0]  alu_op_i,
     input         illegal_inst_i,
 
+    input         is_m_ext_i, //mext
+
     // Outputs to EX
     output reg [31:0] execute_immediate_o,
     output reg        immediate_sel_o,
@@ -260,7 +272,9 @@ module id_ex_reg (
     output reg [4:0]  src2_sel_o,
     output reg [4:0]  dest_reg_sel_o,
     output reg [2:0]  alu_op_o,
-    output reg        illegal_inst_o
+    output reg        illegal_inst_o,
+
+    output reg        is_m_ext_o
 );
 
 always @(posedge clk or negedge reset) begin
@@ -281,6 +295,8 @@ always @(posedge clk or negedge reset) begin
         dest_reg_sel_o      <= 5'h0;
         alu_op_o            <= 3'h0;
         illegal_inst_o      <= 1'b0;
+
+        is_m_ext_o           <=1'b0; // m extension
     end
     else if (!stall_n) begin
         execute_immediate_o <= immediate_i;
@@ -299,6 +315,8 @@ always @(posedge clk or negedge reset) begin
         dest_reg_sel_o      <= dest_reg_sel_i;
         alu_op_o            <= alu_op_i;
         illegal_inst_o      <= illegal_inst_i;
+
+        is_m_ext_o          <=is_m_ext_i; //mext
     end
 end
 
