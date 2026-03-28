@@ -32,6 +32,9 @@ module execute
 	input  [2:0]  alu_op,
 	input  [1:0]  dmem_raddr,
 
+
+      input        is_m_ext,
+
 	// -----------------------------
 	// FROM WB
 	// -----------------------------
@@ -171,7 +174,31 @@ always @(*) begin
     	lui:   	ex_result = execute_imm;
 
     	alu: begin
-        	case (alu_op)
+        if (is_m_ext) begin
+            case (alu_op)
+                MUL: ex_result = alu_operand1 * alu_operand2;
+                
+                DIV: begin
+                    if (alu_operand2 == 32'b0) 
+                        ex_result = 32'hFFFF_FFFF; // RISC-V spec for div-by-zero
+                    else 
+                        ex_result = $signed(alu_operand1) / $signed(alu_operand2);
+                end
+                
+                REM: begin
+                    if (alu_operand2 == 32'b0) 
+                        ex_result = alu_operand1;  // RISC-V spec for rem-by-zero
+                    else 
+                        ex_result = $signed(alu_operand1) % $signed(alu_operand2);
+                end
+                
+                // You can add DIVU (unsigned div) and REMU (unsigned mod) here later!
+                default: ex_result = 32'hx;
+            endcase
+            
+        end else begin
+            // ... Your existing ADD, SLL, SLT, XOR, etc. case statement goes here ...
+            case (alu_op)
             	ADD : ex_result =
                   	arithsubtype
                   	? alu_operand1 - alu_operand2
@@ -188,7 +215,8 @@ always @(*) begin
             	AND : ex_result = alu_operand1 & alu_operand2;
             	default: ex_result = 'hx;
         	endcase
-    	end
+        end
+    end
 
     	default: ex_result = 'hx;
 	endcase
