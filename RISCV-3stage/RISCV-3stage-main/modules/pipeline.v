@@ -59,11 +59,6 @@
 	wire               mem_to_reg;
 	wire               illegal_inst;
 
-
-
-	wire               is_m_ext;
-
-
 	wire       [31: 0] execute_immediate;
 	wire               alu;
 	wire               lui;
@@ -173,9 +168,8 @@ IF_ID IF_ID_stage (
 	.dest_reg_sel_w 	(dest_reg_sel),
 	.alu_operation_w	(alu_operation),
 	.illegal_inst_w 	(illegal_inst),
-	.instruction_o  (instruction),
+	.instruction_o  (instruction)
 
-	.is_m_ext_w         (is_m_ext)
 );
 
 
@@ -261,7 +255,7 @@ execute execute (
 	.alu_op       (alu_operation),
 	.dmem_raddr   (dmem_read_offset),
 
-	.is_m_ext     (is_m_ext),
+
 
 	// -----------------
 	// FROM WB
