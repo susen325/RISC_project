@@ -1,8 +1,10 @@
-//  OPCODE and parameter definitions
+// ----------------------------------------------------------------------------
+// OPCODE and parameter definitions
+// ----------------------------------------------------------------------------
 
 `define OPCODE      6:0
 `define FUNC3       14:12
-`define FUNC7       31:25
+`define FUNCT7      31:25    // ADDED: Required for M-extension detection
 `define SUBTYPE     30
 `define RD          11:7
 `define RS1         19:15
@@ -21,7 +23,8 @@ localparam  [ 6: 0] LUI     = 7'b0110111,        // U-type
                     ARITHI  = 7'b0010011,        // I-type
                     ARITHR  = 7'b0110011;        // R-type
 
-
+// FUNCT7, INST[31:25]
+localparam  [ 6: 0] M_EXT   = 7'b0000001;        // ADDED: M-Extension Identifier
 
 // FUNC3, INST[14:12], INST[6:0] = 7'b1100011
 localparam  [ 2: 0] BEQ     = 3'b000,
@@ -43,7 +46,7 @@ localparam  [ 2: 0] SB      = 3'b000,
                     SH      = 3'b001,
                     SW      = 3'b010;
                     
-// FUNC3, INST[14:12], INST[6:0] = 7'b0110011, 7'b0010011
+// FUNC3, INST[14:12], INST[6:0] = 7'b0110011, 7'b0010011 (Standard Arithmetic)
 localparam  [ 2: 0] ADD     = 3'b000,    // inst[30] == 0: ADD, inst[31] == 1: SUB
                     SLL     = 3'b001,
                     SLT     = 3'b010,
@@ -52,12 +55,8 @@ localparam  [ 2: 0] ADD     = 3'b000,    // inst[30] == 0: ADD, inst[31] == 1: S
                     SR      = 3'b101,    // inst[30] == 0: SRL, inst[31] == 1: SRA
                     OR      = 3'b110,
                     AND     = 3'b111;
-                    
-//********************************
-// RV32M Extension Additions
 
-localparam  [ 6: 0] M_EXT   = 7'b0000001; // FUNCT7 value for RV32M ops
-
+// FUNC3, INST[14:12], INST[6:0] = 7'b0110011, INST[31:25] = 7'b0000001 (RV32M Extension)
 localparam  [ 2: 0] MUL     = 3'b000,
                     MULH    = 3'b001,
                     MULHSU  = 3'b010,
