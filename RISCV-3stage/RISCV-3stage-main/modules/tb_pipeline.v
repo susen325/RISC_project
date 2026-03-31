@@ -62,8 +62,6 @@ reg [31:0] prev_result;
 reg [31:0] current_result;
 reg stop_logging; 
 reg [31:0] delayed_pc;
-
-// FIX 1: Ye flag pehle extra zero ko rokega
 reg first_cycle; 
 
 initial begin
@@ -82,6 +80,7 @@ end
 
 always @(negedge clk) begin
     if (reset && f != 0 && !stop_logging) begin 
+        // Read from Register 15 (x15)
         current_result = DUT.regs[15]; 
         
         // 1. Result Print
@@ -91,10 +90,10 @@ always @(negedge clk) begin
             prev_result = current_result; 
         end
         
-        // 2. PC Print (Ek extra zero hata diya yahan se)
+        // 2. PC Print
         if (!first_cycle) begin
             $fwrite(f, "next_pc = %08h\n", delayed_pc);
-            $display("next_pc = %08h", delayed_pc);
+            //$display("next_pc = %08h", delayed_pc); // Uncomment if you want PC spam in console
         end
         first_cycle = 0; 
         
@@ -108,8 +107,10 @@ end
 always @(negedge clk) begin
     if (inst_mem_read_data == 32'h00008067) begin // 'ret' instruction
         
-        // FIX 2: Thoda zyada wait karega taaki 44 exactly print ho jaye
-        #35; 
+        // FIX: Increased delay to 1500ns! 
+        // If a MUL/DIV instruction is in the Execute stage, the pipeline is stalled 
+        // and needs ~640ns (32 cycles * 20ns) to finish computing before we shut down.
+        #1500; 
         
         stop_logging = 1; 
         if (f != 0) begin
