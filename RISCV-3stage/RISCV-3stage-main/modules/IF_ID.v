@@ -56,7 +56,7 @@ module IF_ID
     output [2:0]  alu_operation_w,
     output        illegal_inst_w,
     output [31:0] instruction_o,
-    output        m_ext_w             // NEW: Passes the RV32M flag to execute.v
+    output        m_ext_w             // NEW: Passes the RV32M flag to execute.v  
 );
 
 //////////////// Including OPCODES ////////////////////////////
