@@ -10,6 +10,6 @@ rem x15, x1, x2  (x15 becomes 1)
 
     // tested the result for these instructions and got the the correct output
     you can check the result from simulation-result.txt file 
-
+hexcoded instruction of these instruction are in imem/dmem folder
 
 
