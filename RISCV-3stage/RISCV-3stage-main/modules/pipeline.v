@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------------
-// Pipeline Module
+// Pipeline Module bug The Synchronous RAM Pipeline Drop.
 // ----------------------------------------------------------------------------
 `include "IF_ID.v"
 `include "execute.v"
