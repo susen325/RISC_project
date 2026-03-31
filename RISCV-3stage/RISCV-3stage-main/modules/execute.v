@@ -8,9 +8,6 @@ module execute
     input clk,
     input reset,
 
-    // -----------------------------
-    // FROM ID/EX
-    // -----------------------------
     input  [31:0] reg_rdata1,
     input  [31:0] reg_rdata2,
     input  [31:0] execute_imm,
@@ -26,33 +23,24 @@ module execute
     input         arithsubtype,
     input         mem_to_reg,
     input         stall_read,
-    input         m_ext_i,           // NEW: Identifies RV32M instructions
+    input         m_ext_i,           
 
     input  [4:0]  dest_reg_sel,
     input  [2:0]  alu_op,
     input  [1:0]  dmem_raddr,
 
-    // -----------------------------
-    // FROM WB
-    // -----------------------------
     input         wb_branch_i,
     input         wb_branch_nxt_i,
 
-    // -----------------------------
-    // EX → PIPE
-    // -----------------------------
     output [31:0] alu_operand1,
     output [31:0] alu_operand2,
     output [31:0] write_address,
     output        branch_stall,
-    output        math_stall_o,      // NEW: Tells IF/ID and PC to freeze
+    output        math_stall_o,      
 
     output reg [31:0] next_pc,
     output reg        branch_taken,
 
-    // -----------------------------
-    // EX → WB
-    // -----------------------------
     output [31:0] wb_result,
     output        wb_mem_write,
     output        wb_alu_to_reg,
@@ -65,10 +53,6 @@ module execute
 );
 
 `include "opcode.vh"
-
-// ----------------------------------------------------------------------------
-// LOCAL INTERNAL SIGNALS
-// ----------------------------------------------------------------------------
 
 reg  [31:0] ex_result;
 wire [32:0] ex_result_subs;
@@ -83,17 +67,12 @@ assign ex_result_subu = {1'b0, alu_operand1} - {1'b0, alu_operand2};
 assign write_address = alu_operand1 + execute_imm;
 assign branch_stall  = wb_branch_nxt_i || wb_branch_i;
 
-// ----------------------------------------------------------------------------
-// RV32M: Multi-cycle Math Unit Integration
-// ----------------------------------------------------------------------------
 wire [31:0] m_result, d_result;
 wire m_busy, m_done, d_busy, d_done;
 
-// Decode funct3 to split MUL vs DIV operations (DIV funct3s start with '1')
 wire is_mul = m_ext_i && (alu_op[2] == 1'b0);
 wire is_div = m_ext_i && (alu_op[2] == 1'b1);
 
-// State register to ensure 'start' is only pulsed for one cycle
 reg math_running;
 always @(posedge clk or negedge reset) begin
     if (!reset) 
@@ -104,15 +83,15 @@ always @(posedge clk or negedge reset) begin
         math_running <= 1'b0;
 end
 
-// Handshake signals
 wire m_start = is_mul && !math_running && !m_done;
 wire d_start = is_div && !math_running && !d_done;
 wire math_done = m_done || d_done;
 
-// Stall the pipeline if a math operation is requested but hasn't finished
 assign math_stall_o = m_ext_i && !math_done;
 
-// Instantiate Multiplier
+// NEW: Control signal mask. Zeros out the EX outputs while math is computing (NOP injection)
+wire ctrl_enable = !math_stall_o;
+
 m_unit u_m_unit (
     .clk       (clk),
     .reset     (reset),
@@ -125,7 +104,6 @@ m_unit u_m_unit (
     .done      (m_done)
 );
 
-// Instantiate Divider
 d_unit u_d_unit (
     .clk       (clk),
     .reset     (reset),
@@ -138,10 +116,6 @@ d_unit u_d_unit (
     .done      (d_done)
 );
 
-// ----------------------------------------------------------------------------
-// Next PC Logic
-// ----------------------------------------------------------------------------
-
 always @(*) begin
     next_pc      = fetch_pc + 4;
     branch_taken = !branch_stall;
@@ -149,7 +123,6 @@ always @(*) begin
     case (1'b1)
         jal  : next_pc = pc + execute_imm;
         jalr : next_pc = alu_operand1 + execute_imm;
-
         branch: begin
             case (alu_op)
                 BEQ:  begin
@@ -179,7 +152,6 @@ always @(*) begin
                 default: next_pc = fetch_pc; 
             endcase
         end
-
         default: begin       
             next_pc      = fetch_pc + 4;
             branch_taken = 1'b0;
@@ -187,23 +159,16 @@ always @(*) begin
     endcase
 end
 
-// ----------------------------------------------------------------------------
-// ALU & Ex_Result Muxing
-// ----------------------------------------------------------------------------
-
 always @(*) begin
     case (1'b1)
         mem_write: ex_result = alu_operand2;
-        jal,
-        jalr:   ex_result = pc + 4;
-        lui:    ex_result = execute_imm;
+        jal, jalr: ex_result = pc + 4;
+        lui:       ex_result = execute_imm;
 
         alu: begin
             if (m_ext_i) begin
-                // Route M-extension results
                 ex_result = is_div ? d_result : m_result;
             end else begin
-                // Standard Arithmetic
                 case (alu_op)
                     ADD : ex_result = arithsubtype ? alu_operand1 - alu_operand2 : alu_operand1 + alu_operand2;
                     SLL : ex_result = alu_operand1 << alu_operand2[4:0];
@@ -221,22 +186,19 @@ always @(*) begin
     endcase
 end
 
-// ----------------------------------------------------------------------------
-// EX → WB Pipeline Register Instance
-// ----------------------------------------------------------------------------
-
 ex_mem_wb_reg u_ex_mem_wb (
     .clk            (clk),
     .reset_n        (reset),
-    .stall_n        (stall_read), // Drops to 0 during math_stall to prevent garbage writeback
+    .stall_n        (stall_read), // Let EX drain normally unless external stall happens
 
     .ex_result      (ex_result),
 
-    .mem_write      (mem_write && !branch_stall),
-    .alu_to_reg     (alu | lui | jal | jalr | mem_to_reg),
-    .dest_reg_sel   (dest_reg_sel),
-    .branch_taken   (branch_taken),
-    .mem_to_reg     (mem_to_reg),
+    // NEW: Inject NOPs by masking outputs with ctrl_enable
+    .mem_write      (mem_write && !branch_stall && ctrl_enable),
+    .alu_to_reg     ((alu | lui | jal | jalr | mem_to_reg) && ctrl_enable),
+    .dest_reg_sel   (ctrl_enable ? dest_reg_sel : 5'h0),
+    .branch_taken   (branch_taken && ctrl_enable),
+    .mem_to_reg     (mem_to_reg && ctrl_enable),
     .read_address   (dmem_raddr),
     .alu_operation  (alu_op),
 
@@ -253,16 +215,12 @@ ex_mem_wb_reg u_ex_mem_wb (
 
 endmodule
 
-
 module ex_mem_wb_reg (
     input       clk,
     input       reset_n,
     input       stall_n,
 
-    // Data
     input  [31:0] ex_result,
-
-    // Control inputs from EX/MEM
     input       mem_write,
     input       alu_to_reg,
     input  [4:0]  dest_reg_sel,
@@ -271,7 +229,6 @@ module ex_mem_wb_reg (
     input  [1:0]  read_address,
     input  [2:0]  alu_operation,
 
-    // Outputs to WB
     output reg [31:0] ex_mem_result,
     output reg        ex_mem_mem_write,
     output reg        ex_mem_alu_to_reg,
