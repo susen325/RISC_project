@@ -1,5 +1,5 @@
 // ----------------------------------------------------------------------------
-// Pipeline Module bug The Synchronous RAM Pipeline Drop.
+// Pipeline Module
 // ----------------------------------------------------------------------------
 `include "IF_ID.v"
 `include "execute.v"
@@ -17,13 +17,11 @@ module pipe
     output                      exception,  
     output [31:0]               pc_out,
 
-    // Interface to Instruction Memory
     output      [31: 0]         inst_mem_address,
     input                       inst_mem_is_valid,
     input       [31: 0]         inst_mem_read_data,
     output                      inst_mem_is_ready,
 
-    // Interface to Data Memory
     output      [31: 0]         dmem_read_address,
     output                      dmem_read_ready,
     input       [31: 0]         dmem_read_data_temp,
@@ -37,12 +35,10 @@ module pipe
     output      [31: 0]         inst_fetch_pc_pipe
 );
     
-    // Data Memory Wires
     wire      [31: 0] dmem_read_data;
     wire        [1:0] dmem_read_offset;
     wire              dmem_read_valid_checker;
     
-    // Instruction Fetch/Decode Stage
     reg       [31: 0] immediate;
     wire              immediate_sel;
     wire       [ 4: 0] src1_select;
@@ -66,22 +62,37 @@ module pipe
     wire      [31: 0] reg_rdata1;
     reg       [31: 0] regs [31: 1];
 
-    // PC
     wire        [31: 0] pc;
     wire        [31: 0] inst_fetch_pc;
     reg         [31: 0] fetch_pc ;  
 
-    // Stalls & Math Extensions
     wire    wb_stall_first;
     wire    wb_stall_second;
     wire    wb_stall;        
     wire    m_ext;          
     wire    math_stall;     
     
-    // NEW: Instant combinational freeze for the front-end!
+    // Instant combinational freeze for the front-end!
     wire    pipe_freeze = stall_read || math_stall;
+
+    // --- NEW: THE SKID BUFFER ---
+    // Catches the instruction falling out of IMEM when a stall hits!
+    reg [31:0] saved_instr;
+    reg        is_saved;
+    always @(posedge clk or negedge reset) begin
+        if (!reset) begin
+            is_saved <= 1'b0;
+            saved_instr <= 32'h0;
+        end else if (pipe_freeze && !is_saved) begin
+            saved_instr <= inst_mem_read_data; // Catch it!
+            is_saved <= 1'b1;
+        end else if (!pipe_freeze) begin
+            is_saved <= 1'b0;
+        end
+    end
+    wire [31:0] safe_inst_mem_read_data = is_saved ? saved_instr : inst_mem_read_data;
+    // ----------------------------
          
-    // Execute Stage
     wire         [31: 0] next_pc;
     wire        [31: 0] write_address;
     wire                branch_taken;
@@ -89,7 +100,6 @@ module pipe
     wire        [31:0]  alu_operand1;
     wire        [31:0]  alu_operand2;
 
-    // Write Back
     wire                wb_alu_to_reg;
     wire        [31: 0] wb_result;
     wire        [ 2: 0] wb_alu_operation;
@@ -120,9 +130,10 @@ IF_ID IF_ID_stage (
     .stall          (stall),
     .exception      (exception),
     .inst_mem_is_valid  (inst_mem_is_valid),
-    .inst_mem_read_data (inst_mem_read_data),
+    
+    // Pass the safe Skid Buffer data instead of raw memory!
+    .inst_mem_read_data (safe_inst_mem_read_data), 
 
-    // NEW: Use combinational freeze here
     .stall_read_i   (pipe_freeze), 
     .inst_fetch_pc  (inst_fetch_pc),
     .instruction_i  (instruction),
@@ -155,17 +166,13 @@ IF_ID IF_ID_stage (
 
 assign reg_rdata1 =
     (src1_select == 5'd0) ? 32'b0 :
-    (!wb_stall && wb_alu_to_reg &&
-    (wb_dest_reg_sel == src1_select))
-        ? (wb_mem_to_reg ? wb_read_data : wb_result)
-        : regs[src1_select];
+    (!wb_stall && wb_alu_to_reg && (wb_dest_reg_sel == src1_select))
+        ? (wb_mem_to_reg ? wb_read_data : wb_result) : regs[src1_select];
 
 assign reg_rdata2 =
     (src2_select == 5'd0) ? 32'b0 :
-    (!wb_stall && wb_alu_to_reg &&
-    (wb_dest_reg_sel == src2_select))
-        ? (wb_mem_to_reg ? wb_read_data : wb_result)
-        : regs[src2_select];
+    (!wb_stall && wb_alu_to_reg && (wb_dest_reg_sel == src2_select))
+        ? (wb_mem_to_reg ? wb_read_data : wb_result) : regs[src2_select];
 
 integer i;
 always @(posedge clk or negedge reset) begin
@@ -173,13 +180,11 @@ always @(posedge clk or negedge reset) begin
         for (i = 1; i < 32; i = i + 1)
             regs[i] <= 32'b0;
     end
-    // NOTE: Uses regular stall_read so WB can drain properly
     else if (wb_alu_to_reg && !stall_read && !wb_stall && wb_dest_reg_sel != 5'd0) begin
         regs[wb_dest_reg_sel] <= wb_mem_to_reg ? wb_read_data : wb_result;
     end
 end
 
-// REVERTED: Just tracks external stalls. Math stall is now handled in the wires!
 always @(posedge clk or negedge reset) begin
     if (!reset) stall_read <= 1'b1;
     else stall_read <= stall; 
@@ -202,7 +207,7 @@ execute execute (
     .branch       (branch),
     .arithsubtype (arithsubtype),
     .mem_to_reg   (mem_to_reg),
-    .stall_read   (stall_read),     // EX handles its own internal stalling now
+    .stall_read   (stall_read),
     .m_ext_i      (m_ext),          
     .dest_reg_sel (dest_reg_sel),
     .alu_op       (alu_operation),
@@ -232,14 +237,14 @@ assign next_pc_pipe = next_pc;
 always @(posedge clk or negedge reset) begin
     if (!reset)
         fetch_pc <= RESET;
-    else if (!pipe_freeze) // NEW: Use combinational freeze
+    else if (!pipe_freeze)
         fetch_pc <= branch_stall ? fetch_pc + 4 : next_pc;
 end
 
 wb wb_stage (
    .clk(clk),
    .reset(reset),
-   .stall_read_i       (stall_read), // Let WB run independent of Math!
+   .stall_read_i       (stall_read), 
    .fetch_pc_i         (fetch_pc),
    .wb_branch_i        (wb_branch),
    .wb_mem_to_reg_i    (wb_mem_to_reg),
@@ -263,7 +268,6 @@ wb wb_stage (
    .wb_stall_second_o  (wb_stall_second)
 );
 assign inst_fetch_pc_pipe = inst_fetch_pc;
-
 assign pc_out = fetch_pc;
 
 endmodule
