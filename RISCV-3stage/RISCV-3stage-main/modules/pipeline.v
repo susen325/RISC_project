@@ -37,17 +37,12 @@ module pipe
     output      [31: 0]         inst_fetch_pc_pipe
 );
     
-    // ----------------------------------------------------------------------------
-    // Declaring Wires and Registers
-    // ----------------------------------------------------------------------------
-
     // Data Memory Wires
     wire      [31: 0] dmem_read_data;
     wire        [1:0] dmem_read_offset;
     wire              dmem_read_valid_checker;
     
     // Instruction Fetch/Decode Stage
-    
     reg       [31: 0] immediate;
     wire              immediate_sel;
     wire       [ 4: 0] src1_select;
@@ -72,22 +67,21 @@ module pipe
     reg       [31: 0] regs [31: 1];
 
     // PC
-
     wire        [31: 0] pc;
     wire        [31: 0] inst_fetch_pc;
     reg         [31: 0] fetch_pc ;  
 
     // Stalls & Math Extensions
-    
     wire    wb_stall_first;
     wire    wb_stall_second;
     wire    wb_stall;        
-    wire    m_ext;          // NEW: RV32M Extension Flag
-    wire    math_stall;     // NEW: Multi-cycle stall from execute stage
-             
+    wire    m_ext;          
+    wire    math_stall;     
+    
+    // NEW: Instant combinational freeze for the front-end!
+    wire    pipe_freeze = stall_read || math_stall;
          
     // Execute Stage
-    
     wire         [31: 0] next_pc;
     wire        [31: 0] write_address;
     wire                branch_taken;
@@ -96,7 +90,6 @@ module pipe
     wire        [31:0]  alu_operand2;
 
     // Write Back
-    
     wire                wb_alu_to_reg;
     wire        [31: 0] wb_result;
     wire        [ 2: 0] wb_alu_operation;
@@ -111,49 +104,35 @@ module pipe
     wire        [31: 0] wb_write_data;
     wire        [31: 0] wb_read_data;
 
-// ----------------------------------------------------------------------------
-// Main memory address/data assignments
-// ----------------------------------------------------------------------------
-assign dmem_write_address       = wb_write_address;     // assigning where to write
-assign dmem_read_address        = alu_operand1 + execute_immediate;  // Assigning address to read from the data memory
+assign dmem_write_address       = wb_write_address;     
+assign dmem_read_address        = alu_operand1 + execute_immediate; 
 assign dmem_read_offset         = dmem_read_address[1:0];
-assign dmem_read_ready          = mem_to_reg;   // load instruction flag to read from memory
-assign dmem_write_ready         = wb_mem_write;     // flag to write into the memory
-assign dmem_write_data          = wb_write_data;    // assigning data to write
-assign dmem_write_byte          = wb_write_byte;    // flag for writing the data bytes
-assign dmem_read_data           = dmem_read_data_temp;      // data read from the memory
+assign dmem_read_ready          = mem_to_reg;   
+assign dmem_write_ready         = wb_mem_write;     
+assign dmem_write_data          = wb_write_data;    
+assign dmem_write_byte          = wb_write_byte;    
+assign dmem_read_data           = dmem_read_data_temp;      
 assign dmem_read_valid_checker  = 1'b1;
 
-// ----------------------------------------------------------------------------
-// Instruction Fetch / Decode Module
-// ----------------------------------------------------------------------------
 IF_ID IF_ID_stage (
     .clk            (clk),
     .reset          (reset),
     .stall          (stall),
     .exception      (exception),
-
-    // Instruction memory interface
     .inst_mem_is_valid  (inst_mem_is_valid),
     .inst_mem_read_data (inst_mem_read_data),
 
-    // Previously pipe.* signals (now explicit ports)
-    .stall_read_i   (stall_read),
+    // NEW: Use combinational freeze here
+    .stall_read_i   (pipe_freeze), 
     .inst_fetch_pc  (inst_fetch_pc),
     .instruction_i  (instruction),
-
-    // WB-stage signals
     .wb_stall       (wb_stall),
     .wb_alu_to_reg  (wb_alu_to_reg),
     .wb_mem_to_reg  (wb_mem_to_reg),
     .wb_dest_reg_sel(wb_dest_reg_sel),
     .wb_result      (wb_result),
     .wb_read_data   (wb_read_data),
-
-    // Instruction memory address offset
     .inst_mem_offset(inst_mem_address[1:0]),
-
-    // Output wires (write-only)
     .execute_immediate_w (execute_immediate),
     .immediate_sel_w    (immediate_sel),
     .alu_w          (alu),
@@ -171,13 +150,8 @@ IF_ID IF_ID_stage (
     .alu_operation_w    (alu_operation),
     .illegal_inst_w     (illegal_inst),
     .instruction_o  (instruction),
-    .m_ext_w        (m_ext)            // NEW: Receive M-extension flag
+    .m_ext_w        (m_ext)            
 );
-
-
-// ----------------------------------------------------------------------------
-// Register File Forwarding
-// ----------------------------------------------------------------------------
 
 assign reg_rdata1 =
     (src1_select == 5'd0) ? 32'b0 :
@@ -193,47 +167,27 @@ assign reg_rdata2 =
         ? (wb_mem_to_reg ? wb_read_data : wb_result)
         : regs[src2_select];
 
-// ----------------------------------------------------------------------------
-// Register File Writeback
-// ----------------------------------------------------------------------------
-
 integer i;
 always @(posedge clk or negedge reset) begin
     if (!reset) begin
         for (i = 1; i < 32; i = i + 1)
             regs[i] <= 32'b0;
     end
+    // NOTE: Uses regular stall_read so WB can drain properly
     else if (wb_alu_to_reg && !stall_read && !wb_stall && wb_dest_reg_sel != 5'd0) begin
-        regs[wb_dest_reg_sel] <=
-            wb_mem_to_reg ? wb_read_data : wb_result;
+        regs[wb_dest_reg_sel] <= wb_mem_to_reg ? wb_read_data : wb_result;
     end
 end
 
-
-// ----------------------------------------------------------------------------
-// Stall Register Logic
-// ----------------------------------------------------------------------------
-// MODIFIED: Now combines external stall with internal math_stall
+// REVERTED: Just tracks external stalls. Math stall is now handled in the wires!
 always @(posedge clk or negedge reset) begin
-    if (!reset)
-        stall_read <= 1'b1;
-    else
-        stall_read <= stall || math_stall; // <-- Freezes pipeline while multiplying/dividing
+    if (!reset) stall_read <= 1'b1;
+    else stall_read <= stall; 
 end
 
-// ----------------------------------------------------------------------------
-// Execute Module
-// ----------------------------------------------------------------------------
 execute execute (
-    // -----------------
-    // Clock / Reset
-    // -----------------
     .clk          (clk),
     .reset        (reset),
-
-    // -----------------
-    // FROM ID/EX
-    // -----------------
     .reg_rdata1   (reg_rdata1),
     .reg_rdata2   (reg_rdata2),
     .execute_imm  (execute_immediate),
@@ -248,32 +202,20 @@ execute execute (
     .branch       (branch),
     .arithsubtype (arithsubtype),
     .mem_to_reg   (mem_to_reg),
-    .stall_read   (stall_read),
-    .m_ext_i      (m_ext),          // NEW: Pass M-extension flag to EX
+    .stall_read   (stall_read),     // EX handles its own internal stalling now
+    .m_ext_i      (m_ext),          
     .dest_reg_sel (dest_reg_sel),
     .alu_op       (alu_operation),
     .dmem_raddr   (dmem_read_offset),
-
-    // -----------------
-    // FROM WB
-    // -----------------
     .wb_branch_i      (wb_branch),
     .wb_branch_nxt_i  (wb_branch_nxt),
-
-    // -----------------
-    // EX → PIPE
-    // -----------------
     .alu_operand1   (alu_operand1),
     .alu_operand2   (alu_operand2),
     .write_address  (write_address),
     .branch_stall   (branch_stall),
-    .math_stall_o   (math_stall),   // NEW: Receive math stall from EX
+    .math_stall_o   (math_stall),   
     .next_pc        (next_pc),
     .branch_taken   (branch_taken),
-
-    // -----------------
-    // EX → WB
-    // -----------------
     .wb_result           (wb_result),
     .wb_mem_write        (wb_mem_write),
     .wb_alu_to_reg       (wb_alu_to_reg),
@@ -287,31 +229,17 @@ execute execute (
 
 assign next_pc_pipe = next_pc;
 
-// ----------------------------------------------------------------------------
-// PC Update Logic
-// ----------------------------------------------------------------------------
-
 always @(posedge clk or negedge reset) begin
     if (!reset)
         fetch_pc <= RESET;
-    else if (!stall_read)
-        fetch_pc <= branch_stall
-                        ? fetch_pc + 4
-                        : next_pc;
+    else if (!pipe_freeze) // NEW: Use combinational freeze
+        fetch_pc <= branch_stall ? fetch_pc + 4 : next_pc;
 end
 
-
-// ----------------------------------------------------------------------------
-// Writeback Module
-// ----------------------------------------------------------------------------
 wb wb_stage (
    .clk(clk),
    .reset(reset),
-
-   // -----------------
-   // Connect WB inputs
-   // -----------------
-   .stall_read_i       (stall_read),
+   .stall_read_i       (stall_read), // Let WB run independent of Math!
    .fetch_pc_i         (fetch_pc),
    .wb_branch_i        (wb_branch),
    .wb_mem_to_reg_i    (wb_mem_to_reg),
@@ -323,10 +251,6 @@ wb wb_stage (
    .wb_read_address_i  (wb_read_address),
    .dmem_read_data_i   (dmem_read_data),
    .dmem_write_valid_i (dmem_write_valid),
-
-   // -----------------
-   // Connect WB outputs
-   // -----------------
    .inst_mem_address_o (inst_mem_address),
    .inst_mem_is_ready_o(inst_mem_is_ready),
    .wb_stall_o         (wb_stall),
