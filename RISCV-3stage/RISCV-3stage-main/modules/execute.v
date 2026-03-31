@@ -73,23 +73,10 @@ wire m_busy, m_done, d_busy, d_done;
 wire is_mul = m_ext_i && (alu_op[2] == 1'b0);
 wire is_div = m_ext_i && (alu_op[2] == 1'b1);
 
-reg math_running;
-always @(posedge clk or negedge reset) begin
-    if (!reset) 
-        math_running <= 1'b0;
-    else if (m_ext_i && !math_running && !m_done && !d_done) 
-        math_running <= 1'b1;
-    else if (m_done || d_done) 
-        math_running <= 1'b0;
-end
+wire m_start = is_mul && !m_busy && !m_done;
+wire d_start = is_div && !d_busy && !d_done;
+assign math_stall_o = (is_mul && !m_done) || (is_div && !d_done);
 
-wire m_start = is_mul && !math_running && !m_done;
-wire d_start = is_div && !math_running && !d_done;
-wire math_done = m_done || d_done;
-
-assign math_stall_o = m_ext_i && !math_done;
-
-// NEW: Control signal mask. Zeros out the EX outputs while math is computing (NOP injection)
 wire ctrl_enable = !math_stall_o;
 
 m_unit u_m_unit (
@@ -189,11 +176,10 @@ end
 ex_mem_wb_reg u_ex_mem_wb (
     .clk            (clk),
     .reset_n        (reset),
-    .stall_n        (stall_read), // Let EX drain normally unless external stall happens
+    .stall_n        (stall_read), 
 
     .ex_result      (ex_result),
 
-    // NEW: Inject NOPs by masking outputs with ctrl_enable
     .mem_write      (mem_write && !branch_stall && ctrl_enable),
     .alu_to_reg     ((alu | lui | jal | jalr | mem_to_reg) && ctrl_enable),
     .dest_reg_sel   (ctrl_enable ? dest_reg_sel : 5'h0),
