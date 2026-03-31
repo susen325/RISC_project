@@ -30,6 +30,11 @@ module m_unit (
     reg [31:0] multiplicand;
     reg        invert_result;
     reg [2:0]  op_type;
+    
+    // Moved declarations here for strict Verilog compliance
+    reg a_is_neg;
+    reg b_is_neg;
+    reg [63:0] final_prod;
 
     always @(posedge clk or negedge reset) begin
         if (!reset) begin
@@ -42,6 +47,9 @@ module m_unit (
             multiplicand  <= 32'b0;
             invert_result <= 1'b0;
             op_type       <= 3'b0;
+            a_is_neg      <= 1'b0;
+            b_is_neg      <= 1'b0;
+            final_prod    <= 64'b0;
         end else begin
             case (state)
                 IDLE: begin
@@ -53,7 +61,6 @@ module m_unit (
                         op_type <= funct3;
                         
                         // Determine signs based on instruction
-                        reg a_is_neg, b_is_neg;
                         a_is_neg = (funct3 == MUL || funct3 == MULH || funct3 == MULHSU) && operand_a[31];
                         b_is_neg = (funct3 == MUL || funct3 == MULH) && operand_b[31];
                         
@@ -83,7 +90,6 @@ module m_unit (
 
                 FINISH: begin
                     // Apply two's complement if the final result should be negative
-                    reg [63:0] final_prod;
                     final_prod = invert_result ? (~accumulator + 1) : accumulator;
 
                     // Select output based on instruction type
