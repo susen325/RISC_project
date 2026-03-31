@@ -39,6 +39,10 @@ module d_unit (
     reg [2:0] op_type;
     reg [31:0] orig_dividend;
 
+    // MOVED TO TOP: Variables for the FINISH state logic
+    reg [31:0] final_q;
+    reg [31:0] final_r;
+
     // Combinational subtraction for the restoring algorithm
     wire [32:0] shift_R = {R[30:0], Q[31]};
     wire [32:0] diff    = shift_R - {1'b0, divisor_abs};
@@ -59,6 +63,8 @@ module d_unit (
             overflow      <= 1'b0;
             op_type       <= 3'b0;
             orig_dividend <= 32'b0;
+            final_q       <= 32'b0;
+            final_r       <= 32'b0;
         end else begin
             case (state)
                 IDLE: begin
@@ -111,9 +117,6 @@ module d_unit (
                 end
 
                 FINISH: begin
-                    reg [31:0] final_q;
-                    reg [31:0] final_r;
-
                     // 1. Handle Edge Cases
                     if (div_by_zero) begin
                         final_q = 32'hFFFFFFFF;
