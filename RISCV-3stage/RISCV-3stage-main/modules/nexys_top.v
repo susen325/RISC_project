@@ -69,14 +69,28 @@ module nexys_top (
 
     // --- LED Output Logic ---
     // Latch the lowest 16 bits of whatever the CPU writes to memory
+// --- LED Output Logic ---
+    // Route different memory addresses to different LED groups!
     reg [15:0] led_reg;
     always @(posedge clk_100MHz or negedge reset_n) begin
         if (!reset_n)
             led_reg <= 16'b0;
-        else if (dmem_write_ready) 
-            led_reg <= dmem_write_data[15:0];
+        else if (dmem_write_ready) begin
+            // If writing to address 0 (MUL), put it on LEDs 4 down to 0
+            if (dmem_write_address == 32'h0) 
+                led_reg[4:0] <= dmem_write_data[4:0];
+                
+            // If writing to address 4 (DIV), put it on LEDs 9 down to 5
+            else if (dmem_write_address == 32'h4) 
+                led_reg[9:5] <= dmem_write_data[4:0];
+                
+            // If writing to address 8 (REM), put it on LEDs 14 down to 10
+            else if (dmem_write_address == 32'h8) 
+                led_reg[14:10] <= dmem_write_data[4:0];
+        end
     end
 
     assign led = led_reg;
 
 endmodule
+
