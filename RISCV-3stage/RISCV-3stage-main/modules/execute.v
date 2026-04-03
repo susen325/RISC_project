@@ -23,7 +23,8 @@ module execute
     input         arithsubtype,
     input         mem_to_reg,
     input         stall_read,
-    input         m_ext_i,           
+    input         m_ext_i,    
+    input         mandist_i,       // NEW: Receives the MANDIST flag from IF_ID       
 
     input  [4:0]  dest_reg_sel,
     input  [2:0]  alu_op,
@@ -103,6 +104,17 @@ d_unit u_d_unit (
     .done      (d_done)
 );
 
+// ----------------------------------------------------------------------------
+// NEW: MANDIST Hardware Accelerator Instance
+// ----------------------------------------------------------------------------
+wire [31:0] mandist_res;
+
+mandist_unit u_mandist (
+    .operand_a (alu_operand1),
+    .operand_b (alu_operand2),
+    .result    (mandist_res)
+);
+
 always @(*) begin
     next_pc      = fetch_pc + 4;
     branch_taken = !branch_stall;
@@ -151,9 +163,10 @@ always @(*) begin
         mem_write: ex_result = alu_operand2;
         jal, jalr: ex_result = pc + 4;
         lui:       ex_result = execute_imm;
-
         alu: begin
-            if (m_ext_i) begin
+            if (mandist_i) begin
+                ex_result = mandist_res; // NEW: Route custom accelerator output
+            end else if (m_ext_i) begin
                 ex_result = is_div ? d_result : m_result;
             end else begin
                 case (alu_op)

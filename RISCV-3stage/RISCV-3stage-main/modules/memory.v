@@ -12,7 +12,7 @@ module instr_mem (
 
     // Initialize instruction memory from hex file
     initial begin
-        $readmemh("home/cse/user/aditya/imem.hex", imem); // CORRECTED: imem.hex into imem
+       $readmemh("imem.hex", imem); // CORRECTED: imem.hex into imem
     end  // added path of imem.hex 
 
     // Synchronous instruction fetch (word-aligned PC)
@@ -51,7 +51,7 @@ module data_mem (
 
     // Initialize data memory from hex file
     initial begin
-        $readmemh("home/cse/user/aditya/dmem.hex", dmem); // CORRECTED: Removed relative path
+        $readmemh("dmem.hex", dmem); // CORRECTED: Removed relative path
     end
     // added path of dmem.hex 
 

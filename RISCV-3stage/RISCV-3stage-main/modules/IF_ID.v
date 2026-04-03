@@ -56,7 +56,8 @@ module IF_ID
     output [2:0]  alu_operation_w,
     output        illegal_inst_w,
     output [31:0] instruction_o,
-    output        m_ext_w             // NEW: Passes the RV32M flag to execute.v  
+    output        m_ext_w,             // NEW: Passes the RV32M flag to execute.v  
+    output         mandist_w           // NEW: Passes the MANDIST flag to execute.v
 );
 
 //////////////// Including OPCODES ////////////////////////////
@@ -91,6 +92,10 @@ end
 // ID Stage: Immediate Generation
 // ----------------------------------------------------------------------------
 
+// ----------------------------------------------------------------------------
+// ID Stage: Immediate Generation
+// ----------------------------------------------------------------------------
+
 always @(*) begin
     immediate    = 32'h0;
     illegal_inst = 1'b0;
@@ -105,7 +110,7 @@ always @(*) begin
                   instruction_i[`FUNC3] == SR)
                  ? {27'b0, instruction_i[24:20]}
                  : {{20{instruction_i[31]}}, instruction_i[31:20]};
-        ARITHR: immediate = 32'h0;
+        ARITHR, CUSTOM0: immediate = 32'h0; // NEW: Added CUSTOM0 here so it isn't flagged as illegal
         LUI   : immediate = {instruction_i[31:12], 12'b0};
         JAL   : immediate = {{12{instruction_i[31]}}, instruction_i[19:12], instruction_i[20], instruction_i[30:21], 1'b0};
         default: illegal_inst = 1'b1;
@@ -118,6 +123,9 @@ end
 // ----------------------------------------------------------------------------
 wire m_ext_inst = (instruction_i[`OPCODE] == ARITHR) && 
                   (instruction_i[`FUNCT7] == M_EXT);
+                  
+              // NEW: Detect MANDIST instruction
+wire mandist_inst = (instruction_i[`OPCODE] == CUSTOM0);
 
 
 // ----------------------------------------------------------------------------
@@ -136,8 +144,10 @@ id_ex_reg u_id_ex (
         (instruction_i[`OPCODE] == ARITHI)
     ),
     .alu_i          (
-        (instruction_i[`OPCODE] == ARITHI) || (instruction_i[`OPCODE] == ARITHR)
-    ),
+    (instruction_i[`OPCODE] == ARITHI) || 
+    (instruction_i[`OPCODE] == ARITHR) ||
+    (instruction_i[`OPCODE] == CUSTOM0) // NEW: Ensure write-back triggers
+),
     .lui_i          (instruction_i[`OPCODE] == LUI),
     .jal_i          (instruction_i[`OPCODE] == JAL),
     .jalr_i         (instruction_i[`OPCODE] == JALR),
@@ -156,6 +166,7 @@ id_ex_reg u_id_ex (
     .alu_op_i       (instruction_i[`FUNC3]),
     .illegal_inst_i (illegal_inst),
     .m_ext_i        (m_ext_inst),         // NEW: Passing into the register
+    .mandist_i      (mandist_inst),       // NEW: Passing into the register
 
 
     // To EX (WIRES)
@@ -175,7 +186,8 @@ id_ex_reg u_id_ex (
     .dest_reg_sel_o      (dest_reg_sel_w),
     .alu_op_o            (alu_operation_w),
     .illegal_inst_o      (illegal_inst_w),
-    .m_ext_o             (m_ext_w)            // NEW: Output wire to pipe.v
+    .m_ext_o             (m_ext_w),            // NEW: Output wire to pipe.v
+    .mandist_o      (mandist_w)           // NEW: Output wire to execute.v
 );
 endmodule
 
@@ -207,6 +219,7 @@ module id_ex_reg (
     input  [2:0]  alu_op_i,
     input         illegal_inst_i,
     input         m_ext_i,             // NEW
+    input         mandist_i,           // NEW
 
     // Outputs to EX
     output reg [31:0] execute_immediate_o,
@@ -225,7 +238,8 @@ module id_ex_reg (
     output reg [4:0]  dest_reg_sel_o,
     output reg [2:0]  alu_op_o,
     output reg        illegal_inst_o,
-    output reg        m_ext_o              // NEW
+    output reg        m_ext_o,              // NEW
+    output reg        mandist_o
 );
 
 always @(posedge clk or negedge reset) begin
@@ -247,6 +261,7 @@ always @(posedge clk or negedge reset) begin
         alu_op_o            <= 3'h0;
         illegal_inst_o      <= 1'b0;
         m_ext_o             <= 1'b0;       // NEW: Reset state
+        mandist_o           <= 1'b0;   // NEW: Reset state
     end
     else if (!stall_n) begin
         execute_immediate_o <= immediate_i;
@@ -266,6 +281,7 @@ always @(posedge clk or negedge reset) begin
         alu_op_o            <= alu_op_i;
         illegal_inst_o      <= illegal_inst_i;
         m_ext_o             <= m_ext_i;    // NEW: Clocked state
+        mandist_o           <= mandist_i; // NEW: Clocked state
     end
 end
 

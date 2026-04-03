@@ -21,7 +21,8 @@ localparam  [ 6: 0] LUI     = 7'b0110111,        // U-type
                     LOAD    = 7'b0000011,        // I-type
                     STORE   = 7'b0100011,        // S-type
                     ARITHI  = 7'b0010011,        // I-type
-                    ARITHR  = 7'b0110011;        // R-type
+                    ARITHR  = 7'b0110011,        // R-type
+                    CUSTOM0 = 7'b0001011;        // NEW: Custom Accelerator Opcode
 
 // FUNCT7, INST[31:25]
 localparam  [ 6: 0] M_EXT   = 7'b0000001;        // ADDED: M-Extension Identifier
@@ -65,3 +66,6 @@ localparam  [ 2: 0] MUL     = 3'b000,
                     DIVU    = 3'b101,
                     REM     = 3'b110,
                     REMU    = 3'b111;
+
+// FUNC3, INST[14:12], INST[6:0] = 7'b0001011 (CUSTOM0)
+localparam  [ 2: 0] MANDIST_F3 = 3'b000;

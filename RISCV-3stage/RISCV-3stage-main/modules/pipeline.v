@@ -69,7 +69,8 @@ module pipe
     wire    wb_stall_first;
     wire    wb_stall_second;
     wire    wb_stall;        
-    wire    m_ext;          
+    wire    m_ext;     
+    wire    mandist_w;       // NEW: Wire to connect IF_ID to EX     
     wire    math_stall;     
     
     // Instant combinational freeze for the front-end!
@@ -161,7 +162,8 @@ IF_ID IF_ID_stage (
     .alu_operation_w    (alu_operation),
     .illegal_inst_w     (illegal_inst),
     .instruction_o  (instruction),
-    .m_ext_w        (m_ext)            
+    .m_ext_w        (m_ext),
+    .mandist_w         (mandist_w)      // NEW: Connect output to wire            
 );
 
 assign reg_rdata1 =
@@ -208,7 +210,8 @@ execute execute (
     .arithsubtype (arithsubtype),
     .mem_to_reg   (mem_to_reg),
     .stall_read   (stall_read),
-    .m_ext_i      (m_ext),          
+    .m_ext_i      (m_ext),
+    .mandist_i    (mandist_w),     // NEW: Connect wire to input          
     .dest_reg_sel (dest_reg_sel),
     .alu_op       (alu_operation),
     .dmem_raddr   (dmem_read_offset),
