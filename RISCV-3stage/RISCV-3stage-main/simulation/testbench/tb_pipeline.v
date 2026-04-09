@@ -73,8 +73,8 @@ initial begin
         stop_logging = 0;
         delayed_pc = 0; 
         first_cycle = 1; 
-        $fwrite(f, "time:%16d ,result = %8d\n", 0, 0); 
-        $display("time:%16d ,result = %8d", 0, 0);
+        $fwrite(f, "Logging Started...\n"); 
+        $display("Logging Started...");
     end
 end
 
@@ -83,17 +83,20 @@ always @(negedge clk) begin
         // Read from Register 15 (x15)
         current_result = DUT.regs[15]; 
         
-        // 1. Result Print
+        // 1. Result Print (Now includes Operands from x1 and x2)
         if (current_result != prev_result) begin 
-            $fwrite(f, "time:%16t ,result = %8d\n", $time, current_result);
-            $display("time:%16t ,result = %8d", $time, current_result);
+            $fwrite(f, "time:%16t | OP_A (x1): %08h | OP_B (x2): %08h | RESULT (x15): %08h\n", 
+                    $time, DUT.regs[1], DUT.regs[2], current_result);
+            
+            $display("time:%16t | OP_A (x1): %08h | OP_B (x2): %08h | RESULT (x15): %08h", 
+                     $time, DUT.regs[1], DUT.regs[2], current_result);
+                     
             prev_result = current_result; 
         end
         
         // 2. PC Print
         if (!first_cycle) begin
             $fwrite(f, "next_pc = %08h\n", delayed_pc);
-            //$display("next_pc = %08h", delayed_pc); // Uncomment if you want PC spam in console
         end
         first_cycle = 0; 
         
@@ -105,11 +108,10 @@ always @(negedge clk) begin
 end
 
 always @(negedge clk) begin
-    if (inst_mem_read_data == 32'h00008067) begin // 'ret' instruction
+    // Safely catches BOTH 'ret' (00008067) and 'jal x0, 0' (0000006F)
+    if (inst_mem_read_data == 32'h00008067 || inst_mem_read_data == 32'h0000006F) begin 
         
-        // FIX: Increased delay to 1500ns! 
-        // If a MUL/DIV instruction is in the Execute stage, the pipeline is stalled 
-        // and needs ~640ns (32 cycles * 20ns) to finish computing before we shut down.
+        // Extended delay to allow 32-cycle math units to completely drain the pipeline
         #1500; 
         
         stop_logging = 1; 
@@ -136,4 +138,3 @@ initial begin
 end
 
 endmodule
-// timeout error due to more cycles in mul/div ops so after simulation click in f3 or run all or write run all in tcl console.
