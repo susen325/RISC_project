@@ -258,7 +258,7 @@ module mainpipeline(
         .loadStore(loadStoreD)
     );
 
-    extend extImm(
+    immediate extImm(
         .immSrc(instrD[31:7]),
         .immCntrl(immCntrlD),
         .immExt(immExtD)
