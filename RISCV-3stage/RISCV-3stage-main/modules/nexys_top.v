@@ -153,6 +153,7 @@ data_mem DMEM (
 // ---------------------------------------------------------
 // 6. LED OUTPUT REGISTER 
 // ---------------------------------------------------------
+            // for 7 segment display checking 
 reg [15:0] led_reg = 0;
 reg [31:0] sev_seg_reg = 0; // NEW: Holds the number for the display
 
