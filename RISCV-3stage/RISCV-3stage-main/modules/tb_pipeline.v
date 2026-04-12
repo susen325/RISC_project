@@ -103,7 +103,7 @@ always @(negedge clk) begin
         $fflush(f); 
     end
 end
-
+                  
 always @(negedge clk) begin
     if (inst_mem_read_data == 32'h00008067) begin // 'ret' instruction
         
@@ -134,5 +134,5 @@ initial begin
     $dumpfile("./pipeline.vcd");
     $dumpvars(0, tb_pipeline);
 end
-
+    
 endmodule
