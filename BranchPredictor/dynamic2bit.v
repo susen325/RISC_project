@@ -4,7 +4,7 @@ module dynamic2bit #(
     parameter TAG_WIDTH   = 32 - INDEX_WIDTH
 ) (
     input  wire        clk,
-    input  wire        rest,
+    input  wire        rst,
 
     // Fetch Stage Inputs
     input  wire [31:0] fetchPC,
