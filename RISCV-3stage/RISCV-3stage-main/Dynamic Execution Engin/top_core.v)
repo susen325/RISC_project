@@ -1,0 +1,117 @@
+`timescale 1ns / 1ps
+
+module top_core (
+    input  wire clk,
+    input  wire reset,
+    
+    // Output for the FPGA LEDs (We will snoop the Register File or ROB Commit)
+    output wire [15:0] demo_led_output
+);
+
+    // =========================================================
+    // 1. INSTRUCTION MEMORY (From your memory.v)
+    // =========================================================
+    wire [31:0] fetch_pc;
+    wire [31:0] fetch_instr;
+    
+    instr_mem IMEM (
+        .clk(clk),
+        .pc(fetch_pc),
+        .instr(fetch_instr)
+    );
+
+    // =========================================================
+    // 2. FETCH / DECODE BARRIER
+    // =========================================================
+    wire        pipeline_stall;
+    wire [31:0] decode_pc;
+    wire [31:0] decode_instr;
+    wire [4:0]  rs1, rs2, rd;
+    wire [6:0]  opcode, funct7;
+    wire [2:0]  funct3;
+
+    IF_ID_dynamic DECODE_REG (
+        .clk(clk),
+        .reset(reset),
+        .fetch_pc(fetch_pc),
+        .fetch_instr(fetch_instr),
+        .pipeline_stall(pipeline_stall),
+        .decode_pc(decode_pc),
+        .decode_instr(decode_instr),
+        .rs1(rs1), .rs2(rs2), .rd(rd),
+        .opcode(opcode), .funct3(funct3), .funct7(funct7)
+    );
+
+    // =========================================================
+    // 3. THE REORDER BUFFER (ROB) - The Checkpoint
+    // =========================================================
+    wire        rob_full;
+    wire [3:0]  issue_tag;
+    
+    // Commit Signals
+    wire        commit_reg_we;
+    wire [4:0]  commit_reg_rd;
+    wire [31:0] commit_reg_data;
+    wire        commit_mem_we;
+    wire [31:0] commit_mem_addr;
+    wire [31:0] commit_mem_data;
+    wire        pipeline_flush;
+    wire [31:0] recovery_pc;
+
+    rob #( .ENTRIES(8) ) ROB_UNIT (
+        .clk(clk),
+        .reset(reset),
+        // Issue
+        .issue_we(1'b1), // Simplified for top-level flow
+        .issue_is_store(opcode == 7'b0100011),
+        .issue_is_branch(opcode == 7'b1100011),
+        .issue_dest_reg(rd),
+        .issue_tag(issue_tag),
+        .rob_full(rob_full),
+        // Commit
+        .commit_reg_we(commit_reg_we),
+        .commit_reg_rd(commit_reg_rd),
+        .commit_reg_data(commit_reg_data),
+        .commit_mem_we(commit_mem_we),
+        .commit_mem_addr(commit_mem_addr),
+        .commit_mem_data(commit_mem_data),
+        .pipeline_flush(pipeline_flush),
+        .recovery_pc(recovery_pc)
+    );
+
+    // =========================================================
+    // 4. DATA MEMORY (From your memory.v) -> THE SAFE CONNECTION
+    // =========================================================
+    wire        mem_re;
+    wire [31:0] mem_raddr;
+    wire [31:0] mem_rdata;
+
+    data_mem DMEM (
+        .clk(clk),
+        // READ PORT: Driven by rs_mem to get data quickly
+        .re(mem_re),
+        .raddr(mem_raddr),
+        .rdata(mem_rdata),
+        
+        // WRITE PORT: Driven STRICTLY by the ROB to prevent corruption
+        .we(commit_mem_we),
+        .waddr(commit_mem_addr),
+        .wdata(commit_mem_data),
+        .wstrb(4'b1111) // Assuming 32-bit word writes for the demo
+    );
+
+    // =========================================================
+    // 5. DEMO OUTPUT (Eavesdropping on the Commit Stage)
+    // =========================================================
+    // To prove your processor works, we instantly show the lowest 16 bits 
+    // of whatever answer the ROB just safely committed to register x15.
+    reg [15:0] led_reg;
+    always @(posedge clk or negedge reset) begin
+        if (!reset) led_reg <= 16'b0;
+        else if (commit_reg_we && commit_reg_rd == 5'd15) begin
+            led_reg <= commit_reg_data[15:0];
+        end
+    end
+    assign demo_led_output = led_reg;
+
+endmodule
