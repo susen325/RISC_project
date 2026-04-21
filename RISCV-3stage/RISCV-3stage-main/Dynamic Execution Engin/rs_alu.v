@@ -1,82 +1,125 @@
 `timescale 1ns/1ps
 
-module rs_alu (
+module rs_alu #(
+    parameter [3:0] MY_TAG = 4'd1
+)(
     input  wire        clk,
     input  wire        reset,
     
-    // --- PORT 1: Issue Stage (Receiving a new instruction) ---
+    // --- Issue Stage ---
     input  wire        issue_we,
-    input  wire [2:0]  issue_op,
-    input  wire [31:0] issue_vj,
-    input  wire [3:0]  issue_qj,
-    input  wire [31:0] issue_vk,
-    input  wire [3:0]  issue_qk,
-    
-    // Tells the pipeline to stall if both slots are full!
-    output wire        rs_full,       
+    input  wire [6:0]  issue_opcode,
+    input  wire [2:0]  issue_funct3,
+    input  wire [31:0] issue_vj,       
+    input  wire [3:0]  issue_qj,       
+    input  wire [31:0] issue_vk,       
+    input  wire [3:0]  issue_qk,       
+    input  wire [31:0] issue_imm,     
+    input  wire [3:0]  issue_rob_tag,  
+    input  wire [31:0] issue_pc,       // Need PC for branch calculations
+    output wire        rs_busy,
 
-    // --- PORT 2: The CDB (Snooping for missing data) ---
+    // --- CDB Snooping ---
     input  wire        cdb_valid,
     input  wire [3:0]  cdb_tag,
     input  wire [31:0] cdb_value,
+    
+    // --- Pipeline Flush ---
+    input  wire        pipeline_flush,
 
-    // --- PORT 3: To the actual ALU (Firing the instruction) ---
-    output wire        alu_start,
-    output wire [2:0]  alu_op,
-    output wire [31:0] alu_vj,
-    output wire [31:0] alu_vk,
-    input  wire        alu_ack      // ALU says "I got it!"
+    // --- Arbiter Handshake ---
+    output wire        alu_req,
+    input  wire        alu_grant,
+    output wire [3:0]  alu_tag,          
+    output wire [31:0] alu_value,        
+    output wire        alu_mispredict    // Tells the ROB we guessed wrong!
 );
 
-    // Wires for Slot 1 (Given Tag ID: 4'd1)
-    wire slot1_busy, slot1_ready;
-    wire [2:0] slot1_op;
-    wire [31:0] slot1_vj, slot1_vk;
-    wire slot1_we  = issue_we && !slot1_busy; // Only write if not busy
-    wire slot1_ack = alu_ack && slot1_ready;  // Acknowledge if this slot fired
-
-    rs_slot #(.MY_TAG(4'd1)) SLOT_1 (
-        .clk(clk), .reset(reset),
-        .issue_we(slot1_we), .issue_op(issue_op), 
-        .issue_vj(issue_vj), .issue_qj(issue_qj), 
-        .issue_vk(issue_vk), .issue_qk(issue_qk),
-        .rs_busy(slot1_busy),
-        .cdb_valid(cdb_valid), .cdb_tag(cdb_tag), .cdb_value(cdb_value),
-        .ready_to_exec(slot1_ready), .exec_op(slot1_op), 
-        .exec_vj(slot1_vj), .exec_vk(slot1_vk), .exec_ack(slot1_ack)
-    );
-
-    // Wires for Slot 2 (Given Tag ID: 4'd2)
-    wire slot2_busy, slot2_ready;
-    wire [2:0] slot2_op;
-    wire [31:0] slot2_vj, slot2_vk;
-    // Only write to Slot 2 if Slot 1 is busy!
-    wire slot2_we  = issue_we && slot1_busy && !slot2_busy; 
-    // Acknowledge Slot 2 ONLY if it fired and Slot 1 didn't fire
-    wire slot2_ack = alu_ack && slot2_ready && !slot1_ready; 
-
-    rs_slot #(.MY_TAG(4'd2)) SLOT_2 (
-        .clk(clk), .reset(reset),
-        .issue_we(slot2_we), .issue_op(issue_op), 
-        .issue_vj(issue_vj), .issue_qj(issue_qj), 
-        .issue_vk(issue_vk), .issue_qk(issue_qk),
-        .rs_busy(slot2_busy),
-        .cdb_valid(cdb_valid), .cdb_tag(cdb_tag), .cdb_value(cdb_value),
-        .ready_to_exec(slot2_ready), .exec_op(slot2_op), 
-        .exec_vj(slot2_vj), .exec_vk(slot2_vk), .exec_ack(slot2_ack)
-    );
-
-    // --- ARBITRATION LOGIC (Who gets to use the ALU?) ---
+    reg busy;
+    reg [31:0] vj, vk, imm, pc;
+    reg [3:0]  qj, qk;
+    reg [6:0]  opcode;
+    reg [2:0]  funct3;
+    reg [3:0]  my_rob_tag;
     
-    // The whole RS is full only if BOTH slots are taken
-    assign rs_full = slot1_busy && slot2_busy;
+    reg is_calculating;
+    reg is_waiting_for_bus;
+    reg [31:0] result;
+    reg        mispredicted;
 
-    // Fire the ALU if either slot is ready
-    assign alu_start = slot1_ready || slot2_ready;
+    assign rs_busy = busy;
+    assign alu_req = is_waiting_for_bus;
+    assign alu_tag = my_rob_tag;
+    assign alu_value = result;
+    assign alu_mispredict = mispredicted;
 
-    // If both happen to be ready at the exact same time, Slot 1 wins (Priority Mux)
-    assign alu_op = slot1_ready ? slot1_op : slot2_op;
-    assign alu_vj = slot1_ready ? slot1_vj : slot2_vj;
-    assign alu_vk = slot1_ready ? slot1_vk : slot2_vk;
+    always @(posedge clk or negedge reset) begin
+        if (!reset || pipeline_flush) begin
+            busy <= 1'b0;
+            is_calculating <= 1'b0;
+            is_waiting_for_bus <= 1'b0;
+            qj <= 4'b0; qk <= 4'b0;
+        end else begin
+            
+            // 1. CLEARING THE STATION
+            if (alu_grant && is_waiting_for_bus) begin
+                busy <= 1'b0;
+                is_waiting_for_bus <= 1'b0;
+            end 
+            
+            // 2. ISSUING NEW INSTRUCTION
+            else if (issue_we && !busy) begin
+                busy <= 1'b1;
+                opcode <= issue_opcode;
+                funct3 <= issue_funct3;
+                imm <= issue_imm;
+                pc <= issue_pc;
+                my_rob_tag <= issue_rob_tag;
+                
+                // CDB Bypass
+                if (cdb_valid && issue_qj != 0 && issue_qj == cdb_tag) begin
+                    vj <= cdb_value; qj <= 4'd0;
+                end else begin vj <= issue_vj; qj <= issue_qj; end
+
+                if (cdb_valid && issue_qk != 0 && issue_qk == cdb_tag) begin
+                    vk <= cdb_value; qk <= 4'd0;
+                end else begin vk <= issue_vk; qk <= issue_qk; end
+            end 
+            
+            // 3. SNOOPING THE CDB
+            else if (busy && !is_calculating && !is_waiting_for_bus) begin
+                if (qj != 4'd0 && cdb_valid && qj == cdb_tag) begin vj <= cdb_value; qj <= 4'd0; end
+                if (qk != 4'd0 && cdb_valid && qk == cdb_tag) begin vk <= cdb_value; qk <= 4'd0; end
+                
+                // 4. READY TO EXECUTE!
+                if (qj == 0 && qk == 0) is_calculating <= 1'b1;
+            end
+            
+            // 5. THE ACTUAL MATH & BRANCH LOGIC
+            else if (is_calculating) begin
+                is_calculating <= 1'b0;
+                is_waiting_for_bus <= 1'b1;
+                mispredicted <= 1'b0; // Default to correct prediction
+                
+                // Standard I-Type Math (e.g., ADDI)
+                if (opcode == 7'b0010011) begin
+                    result <= vj + imm;
+                end 
+                // Standard R-Type Math (e.g., ADD, SUB)
+                else if (opcode == 7'b0110011) begin
+                    result <= vj + vk; // Expanded ALU logic goes here (SUB, AND, OR)
+                end
+                // Branch Logic (B-Type)
+                else if (opcode == 7'b1100011) begin
+                    if (funct3 == 3'b000) begin // BEQ
+                        if (vj == vk) begin 
+                            mispredicted <= 1'b1; // Trigger ROB flush!
+                            result <= pc + imm;   // The correct address to jump to
+                        end
+                    end
+                end
+            end
+        end
+    end
 
 endmodule
