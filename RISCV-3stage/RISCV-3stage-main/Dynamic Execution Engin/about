@@ -11,3 +11,8 @@ input for testbenches
 add x3, x1, x2   # 1. x3 = 10 + 20 = 30
 sub x4, x3, x5   # 2. x4 = 30 - 5  = 25 (DEPENDENT: Must wait for Inst 1)
 add x6, x7, x8   # 3. x6 = 100+200 = 300 (INDEPENDENT: Should execute immediately!)
+
+Why does the ROB force them to commit in order if they are independent?
+Imagine if the mul instruction suddenly triggered a hardware error or an exception. If the processor had already permanently saved the future x4 instruction to the Register File, your software state would be corrupted and impossible to recover. By holding x4 in the ROB until x3 is safely finished, your processor can instantly flush the pipeline and pretend the error happened exactly where it was supposed to.
+
+You have the perfect narrative for your presentation now: The execution units run wild and out-of-order based on data independence, but the ROB acts as the strict security guard, ensuring the final permanent state updates exactly as the programmer wrote it.
