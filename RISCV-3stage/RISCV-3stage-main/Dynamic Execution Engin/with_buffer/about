@@ -1,0 +1,16 @@
+// --- PART 1: The Hazard Gauntlet ---
+I1:  ADDI x1, x0, 10    // x1 = 10
+I2:  ADDI x2, x0, 20    // x2 = 20
+I3:  MUL  x3, x1, x2    // x3 = 200 (RAW Hazard: Waits for I1 and I2)
+I4:  ADDI x1, x0, 5     // x1 = 5   (WAR Hazard: Overwrites x1 safely)
+I5:  ADDI x3, x0, 99    // x3 = 99  (WAW Hazard: Bypasses MUL, but commits AFTER it)
+
+// --- PART 2: Memory & Division Gauntlet ---
+I6:  ADDI x4, x0, 40    // x4 = 40
+I7:  SW   x4, 0(x0)     // RAM[0] = 40
+I8:  LW   x5, 0(x0)     // x5 = 40 (RAW Hazard: Must wait for the Store to finish)
+I9:  ADDI x6, x0, 4     // x6 = 4
+I10: DIV  x7, x5, x6    // x7 = 10 (RAW Hazard: Waits for the Load to finish)
+
+// --- PART 3: The Deep Bypass ---
+I11: ADDI x8, x0, 77    // x8 = 77 (INDEPENDENT: Executes instantly, bypassing DIV and LW)
