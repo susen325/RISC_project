@@ -7,11 +7,11 @@ module top_core (
     output wire [31:0] commit_instr
 );
 
-// Global Control Wires
+    // Global Control Wires
     wire        pipeline_flush;
     wire [31:0] recovery_pc;
     wire        pipeline_stall;
-    wire        commit_mem_we; // ADD THIS HERE
+    wire        commit_mem_we; // Declared once here so RS_MEM and ROB can both use it
 
     // =========================================================
     // 1. PROGRAM COUNTER (PC) & FETCH
@@ -46,8 +46,7 @@ module top_core (
         .rs1(rs1), .rs2(rs2), .rd(rd), .opcode(opcode), .funct3(funct3), .funct7(funct7)
     );
 
-
-// =========================================================
+    // =========================================================
     // 3. REGISTER FILE, RAT, AND VALUE CACHE
     // =========================================================
     reg [31:0] reg_file [0:31];
@@ -72,6 +71,7 @@ module top_core (
     wire [3:0]  qk_raw = (qk_rat != 0 && tag_ready[qk_rat]) ? 4'b0 : qk_rat;
 
     // Register File & System Update Logic
+    // (This block handles the cache AND the commits perfectly)
     integer i;
     always @(posedge clk or negedge reset) begin
         if (!reset) begin
@@ -166,7 +166,7 @@ module top_core (
     wire [3:0] mem_tag, mem_rob_tag;
     wire [31:0] mem_value, mem_store_addr_calc, mem_raddr, mem_rdata;
 
-rs_mem #(.MY_TAG(4'd4)) RS_MEM (
+    rs_mem #(.MY_TAG(4'd4)) RS_MEM (
         .clk(clk), .reset(reset), .pipeline_flush(pipeline_flush),
         .issue_we(issue_mem_we), .issue_is_store(issue_is_store),
         .issue_vj(vj_raw), .issue_qj(qj_raw), .issue_vk(vk_raw), .issue_qk(qk_raw),
@@ -176,7 +176,7 @@ rs_mem #(.MY_TAG(4'd4)) RS_MEM (
         .mem_re(mem_re), .mem_raddr(mem_raddr), .mem_rdata(mem_rdata),
         .mem_req(mem_req), .mem_grant(mem_grant), .mem_tag(mem_tag),
         .mem_value(mem_value), .mem_rob_tag(mem_rob_tag), .mem_store_addr(mem_store_addr_calc),
-        .commit_mem_we(commit_mem_we) // ADD THIS HERE
+        .commit_mem_we(commit_mem_we) 
     );
     
     // =========================================================
@@ -218,27 +218,24 @@ rs_mem #(.MY_TAG(4'd4)) RS_MEM (
     // =========================================================
     // 6. COMMON DATA BUS ARBITER
     // =========================================================
-    // Make sure you update your cdb_arbiter.v module to have a `div_grant` output!
     cdb_arbiter ARBITER (
         .clk(clk), .reset(reset),
         .mem_req(mem_req), .mem_tag(mem_rob_tag), .mem_value(mem_value), .mem_store_addr(mem_store_addr_calc),
         .alu_req(alu_req), .alu_tag(alu_tag), .alu_value(alu_value), .alu_mispredicted(alu_mispredict),
         .mul_req(mul_req), .mul_tag(mul_tag), .mul_value(mul_value), 
-        .div_req(div_req), .div_tag(div_tag), .div_value(div_value), // Dummy removed!
+        .div_req(div_req), .div_tag(div_tag), .div_value(div_value), 
         .mem_grant(mem_grant), .alu_grant(alu_grant), .mul_grant(mul_grant), .div_grant(div_grant), 
         .cdb_valid(cdb_valid), .cdb_tag(cdb_tag), .cdb_value(cdb_value),
         .cdb_store_addr(cdb_store_addr), .cdb_branch_mispredicted(cdb_branch_mispredicted)
     );
 
-
- 
-// =========================================================
+    // =========================================================
     // 7. THE REORDER BUFFER (ROB) & PHYSICAL COMMITS
     // =========================================================
-    wire commit_reg_we, commit_mem_we;
+    wire commit_reg_we; // The duplicate commit_mem_we was safely removed from here
     wire [4:0] commit_reg_rd;
     wire [31:0] commit_reg_data, commit_mem_addr, commit_mem_data;
-    wire [3:0] commit_rob_tag; // ADD THIS WIRE
+    wire [3:0] commit_rob_tag; 
     wire valid_issue = (issue_alu_we || issue_mul_we || issue_div_we || issue_mem_we);
 
     rob #( .ENTRIES(8) ) ROB_UNIT (
@@ -249,32 +246,11 @@ rs_mem #(.MY_TAG(4'd4)) RS_MEM (
         .cdb_valid(cdb_valid), .cdb_tag(cdb_tag), .cdb_value(cdb_value),
         .cdb_store_addr(cdb_store_addr), .cdb_branch_mispredicted(cdb_branch_mispredicted),
         .commit_reg_we(commit_reg_we), .commit_reg_rd(commit_reg_rd), .commit_reg_data(commit_reg_data),
-         .commit_instr(commit_instr),
+        .commit_instr(commit_instr),
         .commit_mem_we(commit_mem_we), .commit_mem_addr(commit_mem_addr), .commit_mem_data(commit_mem_data),
         .pipeline_flush(pipeline_flush), .recovery_pc(recovery_pc),
-        .commit_tag(commit_rob_tag) // ADD THIS CONNECTION
+        .commit_tag(commit_rob_tag) 
     );
-    // Register File & RAT Update Logic
-    integer i;
-    always @(posedge clk or negedge reset) begin
-        if (!reset) begin
-            for (i = 0; i < 32; i = i + 1) begin
-                reg_file[i] <= 32'b0;
-                rat[i] <= 4'b0;
-            end
-        end else begin
-            if (valid_issue && rd != 0 && !issue_is_store && !issue_is_branch) begin
-                rat[rd] <= issue_tag;
-            end
-            if (commit_reg_we && commit_reg_rd != 0) begin
-                reg_file[commit_reg_rd] <= commit_reg_data;
-                if (rat[commit_reg_rd] == cdb_tag) rat[commit_reg_rd] <= 4'b0;
-            end
-            if (pipeline_flush) begin
-                for (i = 0; i < 32; i = i + 1) rat[i] <= 4'b0;
-            end
-        end
-    end
 
     // =========================================================
     // 8. DATA MEMORY (BRAM)
