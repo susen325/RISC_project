@@ -14,3 +14,16 @@ I10: DIV  x7, x5, x6    // x7 = 10 (RAW Hazard: Waits for the Load to finish)
 
 // --- PART 3: The Deep Bypass ---
 I11: ADDI x8, x0, 77    // x8 = 77 (INDEPENDENT: Executes instantly, bypassing DIV and LW)
+
+00a00093
+01400113
+022081b3
+00500093
+06300193
+02800213
+00402023
+00002283
+00400313
+0262c3b3
+04d00413
+00702223
