@@ -3,11 +3,11 @@
 module fpga_top (
     input  wire        clk_100mhz,  // Physical 100MHz clock pin from your board
     input  wire        reset_btn,   // Physical reset button on your board
-    output wire [15:0] led          // 16 physical LEDs on your board
+    output wire [7:0] led          // 16 physical LEDs on your board
 );
 
     // -------------------------------------------------------------------------
-    // 1. CLOCK DIVIDER (Slowing it down so your Tomasulo logic doesn't crash)
+    // 1. CLOCK DIVIDER (Crucial for FPGA timing)
     // -------------------------------------------------------------------------
     reg [23:0] clk_div;
     wire slow_clk;
@@ -16,28 +16,28 @@ module fpga_top (
         clk_div <= clk_div + 1;
     end
     
-    // Grabbing the 3rd bit divides the clock down so the FPGA can handle it
-    // (If you want to see the LEDs change with your own eyes, use clk_div[23])
+    // Dividing the clock down. If you get timing errors later, change this 
+    // to clk_div[4] or higher to make the clock even slower!
     assign slow_clk = clk_div[2]; 
 
     // -------------------------------------------------------------------------
-    // 2. THE PROCESSOR INSTANTIATION
+    // 2. PROCESSOR INSTANTIATION
     // -------------------------------------------------------------------------
-    wire [31:0] final_processor_result;
+    wire [7:0] final_processor_result;
+    wire [31:0] dummy_commit_instr; // Just to connect the unused output
 
-    // Instantiate your actual processor core here
+    // This calls your actual top_core.v file
     top_core my_tomasulo_processor (
-        .clk     (slow_clk),
-        .reset   (reset_btn),
-        
-        // You will need to add this output port to your top_core.v file!
-        .debug_out (final_processor_result) 
+        .clk             (slow_clk),
+        .reset           (reset_btn),
+        .demo_led_output (final_processor_result),
+        .commit_instr    (dummy_commit_instr)
     );
 
     // -------------------------------------------------------------------------
     // 3. WIRING TO THE REAL WORLD
     // -------------------------------------------------------------------------
-    // Connect the lower 16 bits of your processor's answer to the physical LEDs
-    assign led = final_processor_result[15:0];
+    // Connect the answer from your processor directly to the board's LEDs
+    assign led = final_processor_result[7:0];
 
 endmodule
