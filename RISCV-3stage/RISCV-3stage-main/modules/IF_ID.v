@@ -14,31 +14,24 @@ module IF_ID
     input                   inst_mem_is_valid,
     input  [31:0]           inst_mem_read_data,
 
-    // ----------------------------- 
     // Signals previously read from pipe
-    // -----------------------------
     input                   stall_read_i,
     input  [31:0]           inst_fetch_pc,
     input  [31:0]           instruction_i,
 
-    // ----------------------------- 
     // WB-stage signals (passed in)
-    // -----------------------------
     input                   wb_stall,
     input                   wb_alu_to_reg,
     input                   wb_mem_to_reg,
     input  [4:0]            wb_dest_reg_sel,
     input  [31:0]           wb_result,
     input  [31:0]           wb_read_data,
+    input                   flush_i,
 
-    // ----------------------------- 
     // Instruction memory address info
-    // -----------------------------
     input  [1:0]            inst_mem_offset,
     
-    // ----------------------------- 
     // To EX (Pipeline Register Outputs)
-    // -----------------------------
     output [31:0] execute_immediate_w,
     output        immediate_sel_w,
     output        alu_w,
@@ -56,28 +49,80 @@ module IF_ID
     output [2:0]  alu_operation_w,
     output        illegal_inst_w,
     output [31:0] instruction_o,
-    output        m_ext_w,             // NEW: Passes the RV32M flag to execute.v  
-    output         mandist_w           // NEW: Passes the MANDIST flag to execute.v
+    output        m_ext_w,        
+    output        mandist_w      
 );
 
-//////////////// Including OPCODES ////////////////////////////
-`include "opcode.vh"
-// ----------------------------------------------------------------------------
-// Local Internal Signals
-// ----------------------------------------------------------------------------
+// ============================================================================
+// THE NUCLEAR FIX: Opcodes safely hardcoded directly into the module
+// ============================================================================
+`ifndef OPCODES_DEF
+`define OPCODES_DEF
+`define OPCODE      6:0
+`define FUNC3       14:12
+`define FUNCT7      31:25
+`define SUBTYPE     30
+`define RD          11:7
+`define RS1         19:15
+`define RS2         24:20
+`endif
+
+localparam  [31: 0] NOP     = 32'h0000_0013;
+
+localparam  [ 6: 0] LUI     = 7'b0110111,
+                    JAL     = 7'b1101111,
+                    JALR    = 7'b1100111,
+                    BRANCH  = 7'b1100011,
+                    LOAD    = 7'b0000011,
+                    STORE   = 7'b0100011,
+                    ARITHI  = 7'b0010011,
+                    ARITHR  = 7'b0110011,
+                    CUSTOM0 = 7'b0001011;
+
+localparam  [ 6: 0] M_EXT   = 7'b0000001;
+
+localparam  [ 2: 0] BEQ     = 3'b000,
+                    BNE     = 3'b001,
+                    BLT     = 3'b100,
+                    BGE     = 3'b101,
+                    BLTU    = 3'b110,
+                    BGEU    = 3'b111;
+
+localparam  [ 2: 0] LB      = 3'b000,
+                    LH      = 3'b001,
+                    LW      = 3'b010,
+                    LBU     = 3'b100,
+                    LHU     = 3'b101;
+
+localparam  [ 2: 0] SB      = 3'b000,
+                    SH      = 3'b001,
+                    SW      = 3'b010;
+                    
+localparam  [ 2: 0] ADD     = 3'b000,
+                    SLL     = 3'b001,
+                    SLT     = 3'b010,
+                    SLTU    = 3'b011,
+                    XOR     = 3'b100,
+                    SR      = 3'b101,
+                    OR      = 3'b110,
+                    AND     = 3'b111;
+
+localparam  [ 2: 0] MUL     = 3'b000,
+                    MULH    = 3'b001,
+                    MULHSU  = 3'b010,
+                    MULHU   = 3'b011,
+                    DIV     = 3'b100,
+                    DIVU    = 3'b101,
+                    REM     = 3'b110,
+                    REMU    = 3'b111;
+
+localparam  [ 2: 0] MANDIST_F3 = 3'b000;
+// ============================================================================
 
 reg  [31:0] immediate;
 reg         illegal_inst;
 
-// ----------------------------------------------------------------------------
-// IF Stage
-// ----------------------------------------------------------------------------
-
 assign instruction_o = stall_read_i ? NOP : inst_mem_read_data;
-
-// ----------------------------------------------------------------------------
-// Exception Detection
-// ----------------------------------------------------------------------------
 
 always @(posedge clk or negedge reset) begin
     if (!reset)
@@ -87,14 +132,6 @@ always @(posedge clk or negedge reset) begin
     else
         exception <= 1'b0;
 end
-
-// ----------------------------------------------------------------------------
-// ID Stage: Immediate Generation
-// ----------------------------------------------------------------------------
-
-// ----------------------------------------------------------------------------
-// ID Stage: Immediate Generation
-// ----------------------------------------------------------------------------
 
 always @(*) begin
     immediate    = 32'h0;
@@ -110,44 +147,34 @@ always @(*) begin
                   instruction_i[`FUNC3] == SR)
                  ? {27'b0, instruction_i[24:20]}
                  : {{20{instruction_i[31]}}, instruction_i[31:20]};
-        ARITHR, CUSTOM0: immediate = 32'h0; // NEW: Added CUSTOM0 here so it isn't flagged as illegal
+        ARITHR, CUSTOM0: immediate = 32'h0; 
         LUI   : immediate = {instruction_i[31:12], 12'b0};
         JAL   : immediate = {{12{instruction_i[31]}}, instruction_i[19:12], instruction_i[20], instruction_i[30:21], 1'b0};
         default: illegal_inst = 1'b1;
     endcase
 end
 
-// ----------------------------------------------------------------------------
-// RV32M Extension Detection
-// OPCODE = ARITHR (0110011) and FUNCT7 = 0000001
-// ----------------------------------------------------------------------------
 wire m_ext_inst = (instruction_i[`OPCODE] == ARITHR) && 
                   (instruction_i[`FUNCT7] == M_EXT);
                   
-              // NEW: Detect MANDIST instruction
 wire mandist_inst = (instruction_i[`OPCODE] == CUSTOM0);
-
-
-// ----------------------------------------------------------------------------
-// ID -> EX Pipeline Register Instance
-// ----------------------------------------------------------------------------
 
 id_ex_reg u_id_ex (
     .clk            (clk),
     .reset          (reset),
     .stall_n        (stall_read_i),
+    .flush          (flush_i),
 
-    // From ID
     .immediate_i    (immediate),
     .immediate_sel_i(
         (instruction_i[`OPCODE] == JALR)  || (instruction_i[`OPCODE] == LOAD)  ||
         (instruction_i[`OPCODE] == ARITHI)
     ),
     .alu_i          (
-    (instruction_i[`OPCODE] == ARITHI) || 
-    (instruction_i[`OPCODE] == ARITHR) ||
-    (instruction_i[`OPCODE] == CUSTOM0) // NEW: Ensure write-back triggers
-),
+        (instruction_i[`OPCODE] == ARITHI) || 
+        (instruction_i[`OPCODE] == ARITHR) ||
+        (instruction_i[`OPCODE] == CUSTOM0) 
+    ),
     .lui_i          (instruction_i[`OPCODE] == LUI),
     .jal_i          (instruction_i[`OPCODE] == JAL),
     .jalr_i         (instruction_i[`OPCODE] == JALR),
@@ -165,11 +192,9 @@ id_ex_reg u_id_ex (
     .dest_reg_sel_i (instruction_i[`RD]),
     .alu_op_i       (instruction_i[`FUNC3]),
     .illegal_inst_i (illegal_inst),
-    .m_ext_i        (m_ext_inst),         // NEW: Passing into the register
-    .mandist_i      (mandist_inst),       // NEW: Passing into the register
+    .m_ext_i        (m_ext_inst),         
+    .mandist_i      (mandist_inst),       
 
-
-    // To EX (WIRES)
     .execute_immediate_o (execute_immediate_w),
     .immediate_sel_o     (immediate_sel_w),
     .alu_o               (alu_w),
@@ -186,22 +211,17 @@ id_ex_reg u_id_ex (
     .dest_reg_sel_o      (dest_reg_sel_w),
     .alu_op_o            (alu_operation_w),
     .illegal_inst_o      (illegal_inst_w),
-    .m_ext_o             (m_ext_w),            // NEW: Output wire to pipe.v
-    .mandist_o      (mandist_w)           // NEW: Output wire to execute.v
+    .m_ext_o             (m_ext_w),             
+    .mandist_o           (mandist_w)            
 );
 endmodule
-
-
-// ----------------------------------------------------------------------------
-// ID -> EX Pipeline Register Module
-// ----------------------------------------------------------------------------
 
 module id_ex_reg (
     input         clk,
     input         reset,
     input         stall_n,
+    input         flush, 
 
-    // Inputs from ID
     input  [31:0] immediate_i,
     input         immediate_sel_i,
     input         alu_i,
@@ -218,10 +238,9 @@ module id_ex_reg (
     input  [4:0]  dest_reg_sel_i,
     input  [2:0]  alu_op_i,
     input         illegal_inst_i,
-    input         m_ext_i,             // NEW
-    input         mandist_i,           // NEW
+    input         m_ext_i,             
+    input         mandist_i,           
 
-    // Outputs to EX
     output reg [31:0] execute_immediate_o,
     output reg        immediate_sel_o,
     output reg        alu_o,
@@ -238,7 +257,7 @@ module id_ex_reg (
     output reg [4:0]  dest_reg_sel_o,
     output reg [2:0]  alu_op_o,
     output reg        illegal_inst_o,
-    output reg        m_ext_o,              // NEW
+    output reg        m_ext_o,               
     output reg        mandist_o
 );
 
@@ -260,8 +279,28 @@ always @(posedge clk or negedge reset) begin
         dest_reg_sel_o      <= 5'h0;
         alu_op_o            <= 3'h0;
         illegal_inst_o      <= 1'b0;
-        m_ext_o             <= 1'b0;       // NEW: Reset state
-        mandist_o           <= 1'b0;   // NEW: Reset state
+        m_ext_o             <= 1'b0;       
+        mandist_o           <= 1'b0;   
+    end
+    else if (flush) begin 
+        execute_immediate_o <= 32'h0;
+        immediate_sel_o     <= 1'b0;
+        alu_o               <= 1'b0;
+        lui_o               <= 1'b0;
+        jal_o               <= 1'b0;
+        jalr_o              <= 1'b0;
+        branch_o            <= 1'b0; 
+        mem_write_o         <= 1'b0; 
+        mem_to_reg_o        <= 1'b0;
+        arithsubtype_o      <= 1'b0;
+        pc_o                <= 32'h0;
+        src1_sel_o          <= 5'h0;
+        src2_sel_o          <= 5'h0;
+        dest_reg_sel_o      <= 5'h0;
+        alu_op_o            <= 3'h0;
+        illegal_inst_o      <= 1'b0;
+        m_ext_o             <= 1'b0;       
+        mandist_o           <= 1'b0;  
     end
     else if (!stall_n) begin
         execute_immediate_o <= immediate_i;
@@ -280,8 +319,8 @@ always @(posedge clk or negedge reset) begin
         dest_reg_sel_o      <= dest_reg_sel_i;
         alu_op_o            <= alu_op_i;
         illegal_inst_o      <= illegal_inst_i;
-        m_ext_o             <= m_ext_i;    // NEW: Clocked state
-        mandist_o           <= mandist_i; // NEW: Clocked state
+        m_ext_o             <= m_ext_i;    
+        mandist_o           <= mandist_i; 
     end
 end
 
