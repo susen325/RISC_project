@@ -1,10 +1,13 @@
 // ----------------------------------------------------------------------------
 // Instruction Memory (IMEM) - 4KB FPGA-safe ROM
 // ----------------------------------------------------------------------------
+// ----------------------------------------------------------------------------
+// Instruction Memory (IMEM) - 4KB FPGA-safe ROM
+// ----------------------------------------------------------------------------
 module instr_mem (
     input  wire        clk,
     input  wire [31:0] pc,
-    output reg  [31:0] instr
+    output wire [31:0] instr // Changed to wire
 );
 
     (* ram_style = "block" *)
@@ -12,20 +15,17 @@ module instr_mem (
 
     // Initialize instruction memory from hex file
     initial begin
-       $readmemh("imem.hex", imem); // CORRECTED: imem.hex into imem
-    end  // added path of imem.hex 
+       $readmemh("imem.hex", imem); 
+    end 
 
-    // Synchronous instruction fetch (word-aligned PC)
-    always @(posedge clk) begin
-        instr <= imem[pc[11:2]];
-    end
+    // -> THE FIX: Asynchronous (Combinational) instruction fetch
+    // This instantly provides the instruction without a 1-cycle ghost delay
+    assign instr = imem[pc[11:2]];
 
 endmodule
 
-
-
 // ----------------------------------------------------------------------------
-// Data Memory (DMEM) - 4KB FPGA-safe RAM
+// Data Memory (DMEM) - 16KB FPGA-safe RAM with MMIO Protection
 // ----------------------------------------------------------------------------
 module data_mem (
     input         clk,
@@ -43,38 +43,48 @@ module data_mem (
 );
 
     (* ram_style = "block" *)
-    reg [31:0] dmem [0:1023];
+    reg [31:0] dmem [0:4095]; // UPGRADED: 4096 words = 16 KB
 
-    // Decode byte address to word index
-    wire [9:0] rindex = raddr[11:2];
-    wire [9:0] windex = waddr[11:2];
+    // Decode byte address to word index (Need 12 bits for 4096 words)
+    wire [11:0] rindex = raddr[13:2];
+    wire [11:0] windex = waddr[13:2];
 
-    // Initialize data memory from hex file
+    // --- HARDWARE MEMORY PROTECTION LOGIC ---
+    // Safely ignore MMIO addresses (0x8...) and out-of-bounds addresses
+    wire is_mmio_read  = (raddr[31:28] == 4'h8);
+    wire is_mmio_write = (waddr[31:28] == 4'h8);
+    wire valid_raddr   = (!is_mmio_read)  && ((raddr >> 2) < 4096);
+    wire valid_waddr   = (!is_mmio_write) && ((waddr >> 2) < 4096);
+
+    // Initialize data memory (Zero out everything, then load hex)
+    integer i;
     initial begin
-        $readmemh("dmem.hex", dmem); // CORRECTED: Removed relative path
+        for (i = 0; i < 4096; i = i + 1) begin
+            dmem[i] = 32'd0;
+        end
+        $readmemh("dmem.hex", dmem); 
     end
-    // added path of dmem.hex 
 
     // ----------------------------------------------------------------------------
     // Read & Write Logic (Synchronous)
-    // 
-    // - Support byte-wise writes using wstrb
-    // - Provide 1-cycle read latency
-    // - Handle same-cycle read-after-write using byte-level forwarding
     // ----------------------------------------------------------------------------
 
     always @(posedge clk) begin
-        // ---- WRITE ----
-        if (we) begin
+        // ---- PROTECTED WRITE ----
+        if (we && valid_waddr) begin
             if (wstrb[0]) dmem[windex][7:0]   <= wdata[7:0];
             if (wstrb[1]) dmem[windex][15:8]  <= wdata[15:8];
             if (wstrb[2]) dmem[windex][23:16] <= wdata[23:16];
             if (wstrb[3]) dmem[windex][31:24] <= wdata[31:24];
         end
 
-        // ---- READ (1-cycle latency, RAW-safe) ----
+        // ---- PROTECTED READ (1-cycle latency, RAW-safe) ----
         if (re) begin
-            if (we && (rindex == windex)) begin
+            if (!valid_raddr) begin
+                // Return 0 for MMIO or out-of-bounds to prevent X-propagation
+                rdata <= 32'd0;
+            end
+            else if (we && valid_waddr && (rindex == windex)) begin
                 // Byte-level forwarding
                 rdata[7:0]   <= wstrb[0] ? wdata[7:0]   : dmem[rindex][7:0];
                 rdata[15:8]  <= wstrb[1] ? wdata[15:8]  : dmem[rindex][15:8];
@@ -85,7 +95,6 @@ module data_mem (
                 rdata <= dmem[rindex];
             end
         end
-        // else: rdata holds value
     end
 
 endmodule
