@@ -22,7 +22,7 @@ module instr_mem (
         end
         
         // 2. SECOND: Load your 5 instructions over the zeros
-        $readmemh("imem.hex", mem);
+        $readmemh("/home/cse/cs224/imem.hex", mem);
     end
 
     // Asynchronous Read: Updates instantly when PC changes
