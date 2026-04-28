@@ -7,7 +7,7 @@
 
 typedef struct { uint32_t g, f; int parent; int state; } Node;
 
-// USING THE BUGGY CUSTOM HARDWARE
+
 static inline uint32_t hw_mandist(uint32_t a, uint32_t b) {
     uint32_t res;
     asm volatile (".insn r 0x0B, 0, 0, %0, %1, %2" : "=r" (res) : "r" (a), "r" (b));
@@ -26,7 +26,7 @@ static inline void check_neighbor(int nr, int nc, int curr_idx, uint32_t curr_g,
                 if(nodes[n_idx].state == 0 || tentative_g < nodes[n_idx].g) {
                     nodes[n_idx].parent = curr_idx;
                     nodes[n_idx].g = tentative_g;
-                    // THE HACK: Pass Goal FIRST so hardware does (Goal - Current) -> Always Positive!
+                    
                     nodes[n_idx].f = tentative_g + hw_mandist(pack_coords(goal_r, goal_c), pack_coords(nr, nc));
                     nodes[n_idx].state = 1;
                 }
