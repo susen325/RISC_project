@@ -96,7 +96,7 @@ U-TURN MAZE VISUALIZATION:
 ---
 
 ## Receiver Script Code (`receiver_for_astar_2.py`)
-For reference, here is the complete Python receiver script used to capture and visualize the UART data stream. The emojis have been replaced with standard ASCII characters for a cleaner terminal output.
+For reference, here is the complete Python receiver script used to capture and visualize the UART data stream. 
 
 ```python
 import serial
