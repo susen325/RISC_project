@@ -7,7 +7,6 @@
 
 typedef struct { uint32_t g, f; int parent; int state; } Node;
 
-// THE BUGGY HARDWARE
 static inline uint32_t hw_mandist(uint32_t a, uint32_t b) {
     uint32_t res;
     asm volatile (".insn r 0x0B, 0, 0, %0, %1, %2" : "=r" (res) : "r" (a), "r" (b));
@@ -22,8 +21,6 @@ static inline uint32_t safe_hw_mandist(int r1, int c1, int r2, int c2) {
     int r_min = r1 < r2 ? r1 : r2;
     int c_max = c1 > c2 ? c1 : c2;
     int c_min = c1 < c2 ? c1 : c2;
-
-    // Now the hardware ALU will ALWAYS do (Large - Small) = Positive!
     return hw_mandist(pack_coords(r_max, c_max), pack_coords(r_min, c_min));
 }
 
