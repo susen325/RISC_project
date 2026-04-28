@@ -22,6 +22,7 @@ Language: Verilog-2001
 
 💻 Simulation Guide
 Before generating physical hardware, the architecture should be verified using Vivado's behavioral simulator.
+0. UPLOAD ALL VERILOG FILES ON VIVADO (for simulation add in simulation sources,for implementation add in design sources)
 
 1. Load the Assembly
 Write your RISC-V assembly test gauntlet and convert it to 32-bit Hex machine code.
