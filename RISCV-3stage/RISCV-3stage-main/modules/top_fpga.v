@@ -5,156 +5,277 @@ module top_fpga #(
     parameter DMEMSIZE = 4096
 )(
     input  wire clk,        // 100 MHz board clock
-    input  wire reset,      // Active-low reset (CPU_RESET button)
-    
-    // NEW PHYSICAL PINS FOR PERIPHERALS
-    input  wire [15:0] sw,  // 16 slide switches for coordinates
-    input  wire btn_c,      // Center button for Enter/Next
-    output wire [15:0] led, // 16 LEDs
-    output wire [7:0] an,   // 7-segment Anodes
-    output wire [6:0] seg   // 7-segment Cathodes
+    input  wire reset,      // Red C12 button (Active Low) - CPU WAKE/SLEEP
+    input  [15:0] data_1,   // The 16 physical slide switches
+    input  data_reset,      // Down Button - CLEARS ARRAY
+    input  checker,         
+    output [15:0] led,
+    output [7:0]  an,      // Anodes
+    output [6:0]  seg,     // Segments
+    input  wire UART_RXD,   // Receives from PC
+    output wire UART_TXD    // Sends to PC
 );
 
-    wire exception;
-    wire [31:0] current_pc;
-    
-    // LEDs will just look dimly lit since the PC changes at 100MHz, 
-    // but it proves the CPU is running!
-    assign led = current_pc[15:0];
+// ---------------------------------------------------------
+// 1. CLOCK DIVIDER (100 MHz down to 1 Hz)
+// ---------------------------------------------------------
+reg [25:0] clk_cnt = 0;       
+reg        slow_clk = 0;
 
-    // =========================================================
-    // DEBOUNCERS (Cleaning up physical button noise)
-    // =========================================================
-    wire [15:0] clean_sw;
-    wire        clean_btn_c;
+always @(posedge clk) begin
+    // Toggle every 50,000,000 ticks to create a 1 Hz clock (1 second period)
+    if (clk_cnt == 26'd49_999_999) begin
+        clk_cnt  <= 26'd0;
+        slow_clk <= ~slow_clk; // FIXED: Synthesis typo (was ~clk)
+    end else begin
+        clk_cnt <= clk_cnt + 1'b1;
+    end
+end
 
-    // Generate 16 debouncers for the 16 switches
-    genvar i;
-    generate
-        for (i = 0; i < 16; i = i + 1) begin : debounce_switches
-            debouncer u_deb_sw (
-                .clk(clk),
-                .noisy_in(sw[i]),
-                .clean_out(clean_sw[i])
-            );
+// ---------------------------------------------------------
+// 2. CPU WIRES
+// ---------------------------------------------------------
+wire [31:0] current_pc; 
+wire exception;
+wire inst_mem_is_ready;
+wire [31:0] inst_mem_read_data;
+wire [31:0] inst_mem_address;
+wire [31:0] dmem_read_data;
+wire [31:0] dmem_read_address;
+wire [31:0] dmem_write_address;
+wire [31:0] dmem_write_data;
+wire [3:0]  dmem_write_byte;
+wire        dmem_read_ready;
+wire        dmem_write_ready;
+
+// ---------------------------------------------------------
+// 3. INDUSTRIAL DEBOUNCER & ARRAY CAPTURE (Runs on 100 MHz)
+// ---------------------------------------------------------
+reg [15:0] data [0:3]; 
+reg [1:0]  data_counter = 0;
+
+reg [19:0] debounce_timer = 0;
+reg        clean_button = 0;
+reg        clean_button_prev = 0;
+
+always @(posedge clk or posedge data_reset) begin 
+    if(data_reset) begin
+        data_counter <= 2'b0;
+        data[0] <= 16'b0; data[1] <= 16'b0; 
+        data[2] <= 16'b0; data[3] <= 16'b0;
+        debounce_timer <= 0;
+        clean_button <= 0;
+        clean_button_prev <= 0;
+    end
+    else begin
+        // Debouncer: Wait 10ms to ignore metal bouncing
+        if (checker == 1'b1) begin
+            if (debounce_timer < 20'd1_000_000)
+                debounce_timer <= debounce_timer + 1;
+            else
+                clean_button <= 1'b1; 
+        end else begin
+            debounce_timer <= 0;
+            clean_button <= 1'b0;
         end
-    endgenerate
 
-    // Debouncer for the center button
-    debouncer u_deb_btn (
-        .clk(clk),
-        .noisy_in(btn_c),
-        .clean_out(clean_btn_c)
-    );
+        // Edge Detector: Only save once per push
+        clean_button_prev <= clean_button;
+        if(clean_button == 1'b1 && clean_button_prev == 1'b0) begin
+            data[data_counter] <= data_1;
+            data_counter <= data_counter + 1'b1; 
+        end
+    end
+end
 
-    // =========================================================
-    // PIPELINE -> MEMORY WIRES
-    // =========================================================
-    wire [31:0] inst_mem_read_data;
-    wire        inst_mem_is_valid = 1'b1;
-    wire [31:0] inst_mem_address;
-    wire        inst_mem_is_ready;
+// ---------------------------------------------------------
+// 4. ARRAY MMIO SWITCHBOARD
+// ---------------------------------------------------------
+wire is_mmio_read = (dmem_read_address[31] == 1'b1);
+wire is_ram_read  = (dmem_read_address[31] == 1'b0);
+wire is_ram_write = (dmem_write_address[31] == 1'b0); 
 
-    // CPU Data Memory Wires (Intercepted by MMIO)
-    wire [31:0] cpu_dmem_raddr, cpu_dmem_waddr;
-    wire [31:0] cpu_dmem_wdata, cpu_dmem_rdata;
-    wire        cpu_dmem_re, cpu_dmem_we;
-    wire [3:0]  cpu_dmem_wbyte; 
+// 1. Combinational lookup based on current read address
+wire [31:0] mmio_read_data_comb = 
+    (dmem_read_address[3:0] == 4'h0) ? {16'b0, data[0]} :
+    (dmem_read_address[3:0] == 4'h4) ? {16'b0, data[1]} :
+    (dmem_read_address[3:0] == 4'h8) ? {16'b0, data[2]} :
+    (dmem_read_address[3:0] == 4'hC) ? {16'b0, data[3]} : 32'b0;
 
-    // Actual Data Memory Wires
-    wire [31:0] actual_dmem_rdata;
-    wire        actual_dmem_re, actual_dmem_we;
+// 2. 1-Cycle Pipeline Registers to match RAM latency
+reg [31:0] mmio_read_data_reg = 0;
+reg        is_mmio_reg = 0;
 
-    // Peripheral Wires
-    wire [31:0] sev_seg_out_data;
+// MUST use slow_clk to stay perfectly synced with the pipeline!
+always @(posedge clk or negedge reset) begin
+    if (!reset) begin
+        mmio_read_data_reg <= 32'b0;
+        is_mmio_reg        <= 1'b0;
+    end else begin
+        mmio_read_data_reg <= mmio_read_data_comb;
+        is_mmio_reg        <= is_mmio_read;
+    end
+end
 
-    // =========================================================
-    // MMIO BUS CONTROLLER (The Traffic Cop)
-    // =========================================================
-    mmio_controller u_mmio (
-        .clk          (clk),
-        .reset        (reset),
-        
-        // Connected to CPU Execute/WB stages
-        .cpu_raddr    (cpu_dmem_raddr),
-        .cpu_re       (cpu_dmem_re),
-        .cpu_rdata    (cpu_dmem_rdata),
-        
-        .cpu_waddr    (cpu_dmem_waddr),
-        .cpu_wdata    (cpu_dmem_wdata),
-        .cpu_we       (cpu_dmem_we),
-        
-        // Connected to actual dmem.v
-        .dmem_we      (actual_dmem_we),
-        .dmem_re      (actual_dmem_re),
-        .dmem_rdata   (actual_dmem_rdata),
-        
-        // Connected to Physical Hardware
-        .switches     (clean_sw),
-        .btn_c        (clean_btn_c),
-        .sev_seg_data (sev_seg_out_data)
-    );
+// 3. The Multiplexer uses the DELAYED signals
+wire [31:0] final_cpu_read_data = is_mmio_reg ? mmio_read_data_reg : dmem_read_data;
 
-    // =========================================================
-    // 7-SEGMENT DISPLAY DRIVER
-    // =========================================================
-    sev_seg_driver u_display (
-        .clk          (clk),
-        .data_in      (sev_seg_out_data),
-        .anode        (an),
-        .cathode      (seg)
-    );
+// 4. The Safe Memory Gates 
+wire safe_ram_re = dmem_read_ready & is_ram_read;
+wire safe_ram_we = dmem_write_ready & is_ram_write;
 
-    // =========================================================
-    // CORE PROCESSOR PIPELINE
-    // =========================================================
-    pipe pipe_u (
-        .clk                  (clk),           // Fast clock
-        .reset                (reset),
-        .stall                (1'b0),
-        .exception            (exception),
-        .pc_out               (current_pc), 
-        
-        .inst_mem_address     (inst_mem_address), 
-        .inst_mem_is_valid    (inst_mem_is_valid),
-        .inst_mem_read_data   (inst_mem_read_data),
-        .inst_mem_is_ready    (inst_mem_is_ready), 
+// ---------------------------------------------------------
+// 5. PIPELINE 
+// ---------------------------------------------------------
+// CPU Sleep Logic
+wire prog_mode = data_1[15]; 
+wire cpu_run_reset = reset & ~prog_mode; 
 
-        // Route data memory ports to MMIO intercept wires
-        .dmem_read_address    (cpu_dmem_raddr), 
-        .dmem_read_ready      (cpu_dmem_re), 
-        .dmem_read_data_temp  (cpu_dmem_rdata), // CPU gets data from MMIO
-        .dmem_read_valid      (1'b1),
-        
-        .dmem_write_address   (cpu_dmem_waddr), 
-        .dmem_write_ready     (cpu_dmem_we), 
-        .dmem_write_data      (cpu_dmem_wdata), 
-        .dmem_write_byte      (cpu_dmem_wbyte), 
-        .dmem_write_valid     (1'b1)
-    );
+pipe pipe_u (
+    .clk(clk),                     // CPU Runs on Slow Clock
+    .reset(cpu_run_reset), 
+    .stall(1'b0),
+    .exception(exception),
+    .pc_out(current_pc), 
+    .inst_mem_address(inst_mem_address), 
+    .inst_mem_is_valid(1'b1),
+    .inst_mem_read_data(inst_mem_read_data),
+    .inst_mem_is_ready(inst_mem_is_ready), 
+    .dmem_read_address(dmem_read_address), 
+    .dmem_read_ready(dmem_read_ready), 
+    .dmem_read_data_temp(final_cpu_read_data),
+    .dmem_read_valid(1'b1),
+    .dmem_write_address(dmem_write_address), 
+    .dmem_write_ready(dmem_write_ready), 
+    .dmem_write_data(dmem_write_data), 
+    .dmem_write_byte(dmem_write_byte), 
+    .dmem_write_valid(1'b1),
+    .next_pc_pipe(),                    // FIXED: Ignored ports
+    .inst_fetch_pc_pipe()               // FIXED: Ignored ports
+);
 
-    // =========================================================
-    // INSTRUCTION MEMORY (IMEM)
-    // =========================================================
-    instr_mem IMEM (
-        .clk    (clk), 
-        .pc     (inst_mem_address), 
-        .instr  (inst_mem_read_data)
-    );
+// ---------------------------------------------------------
+// 6. UART BOOTLOADER & MEMORY
+// ---------------------------------------------------------
+wire [7:0] rx_data;
+wire       rx_valid;
 
-    // =========================================================
-    // DATA MEMORY (DMEM)
-    // =========================================================
-    data_mem DMEM (
-        .clk    (clk), 
-        .re     (actual_dmem_re),       // Controlled by MMIO
-        .raddr  (cpu_dmem_raddr),       // Pass-through address
-        .rdata  (actual_dmem_rdata),    // Feeds back to MMIO
-        
-        .we     (actual_dmem_we),       // Controlled by MMIO
-        .waddr  (cpu_dmem_waddr),       // Pass-through address
-        .wdata  (cpu_dmem_wdata),       // Pass-through data
-        .wstrb  (cpu_dmem_wbyte)        // Pass-through byte enable
-    );
+uart_rx my_rx (
+    .clk(clk), // UART MUST run at 100MHz to match Baud Rate
+    .reset(reset),
+    .uart_rx_pin(UART_RXD), 
+    .rx_data(rx_data),
+    .rx_valid(rx_valid)
+);
 
+wire [31:0] boot_addr;
+wire [31:0] boot_data;
+wire        boot_we;
+wire boot_reset = reset & prog_mode;
+
+bootloader my_boot (
+    .clk(clk), // Bootloader runs fast
+    .reset(boot_reset),
+    .rx_valid(rx_valid),
+    .rx_data(rx_data),
+    .imem_addr(boot_addr),
+    .imem_data(boot_data),
+    .imem_we(boot_we)
+);
+
+wire [31:0] actual_imem_addr = prog_mode ? boot_addr : inst_mem_address;
+wire [31:0] actual_imem_data = prog_mode ? boot_data : 32'b0; 
+wire        actual_imem_we   = prog_mode ? boot_we   : 1'b0;  
+
+instr_mem IMEM (
+    .clk_read(clk),        // CPU reads at 1 Hz
+    .clk_write(clk),            // Bootloader writes at 100 MHz
+    .pc(actual_imem_addr), 
+    .instr(inst_mem_read_data),
+    .we(actual_imem_we),
+    .addr(actual_imem_addr),
+    .data_in(actual_imem_data)
+);
+
+data_mem DMEM (
+    .clk(clk),             // RAM operates perfectly sync'd with CPU
+    .re(safe_ram_re), 
+    .raddr(dmem_read_address), 
+    .rdata(dmem_read_data), 
+    .we(safe_ram_we), 
+    .waddr(dmem_write_address), 
+    .wdata(dmem_write_data), 
+    .wstrb(dmem_write_byte)
+);
+
+// ---------------------------------------------------------
+// 7. TRACE BUFFER & UART TRANSMITTER (Clock Domain Crossing)
+// ---------------------------------------------------------
+wire       uart_tx_en;
+wire [7:0] uart_tx_data;
+wire       uart_tx_busy;
+ 
+// Because the CPU is slow, this wire stays HIGH for 1 entire second!
+wire raw_trace_we = (dmem_write_ready && (dmem_write_address == 32'h80000040));
+
+// We MUST use a 100MHz edge detector so the Trace Buffer only sees exactly ONE 10ns pulse.
+reg raw_trace_we_prev = 0;
+always @(posedge clk) begin
+    raw_trace_we_prev <= raw_trace_we;
+end
+wire safe_trace_we = (raw_trace_we == 1'b1 && raw_trace_we_prev == 1'b0);
+
+trace_buffer my_trace_bram (
+    .clk(clk),
+    .reset(reset),
+    .trace_we(safe_trace_we),      // Uses the safe 10ns pulse
+    .trace_data(dmem_write_data), 
+    .tx_busy(uart_tx_busy),      
+    .tx_en(uart_tx_en),          
+    .tx_byte(uart_tx_data)       
+);
+   
+uart_tx my_tx (
+    .clk(clk),
+    .reset(reset),
+    .tx_en(uart_tx_en),          
+    .tx_data(uart_tx_data),      
+    .tx_pin(UART_TXD),           
+    .tx_busy(uart_tx_busy)       
+);
+
+// ---------------------------------------------------------
+// 8. LED & 7-SEGMENT OUTPUT REGISTERS 
+// ---------------------------------------------------------
+reg [15:0] led_reg = 0;
+reg [31:0] sev_seg_reg = 0; 
+
+wire is_mmio_write = (dmem_write_address[31] == 1'b1);
+wire is_led_write     = is_mmio_write && (dmem_write_address[7:0] == 8'h08) && dmem_write_ready;
+wire is_sev_seg_write = is_mmio_write && (dmem_write_address[7:0] == 8'h20) && dmem_write_ready;
+
+// Update the LEDs on the slow clock to match the CPU's timing exactly
+always @(posedge clk or negedge reset) begin
+    if (!reset) begin
+        led_reg <= 16'b0;
+        sev_seg_reg <= 32'b0;
+    end else begin
+        if (is_led_write)     led_reg <= dmem_write_data[15:0];
+        if (is_sev_seg_write) sev_seg_reg <= dmem_write_data;
+    end
+end
+
+assign led[13:0] = led_reg[13:0]; 
+assign led[15] = slow_clk;         // Heartbeat! Shows the clock actually ticking.
+assign led[14] = reset;
+
+wire [31:0] debug_terminal = inst_mem_read_data;
+
+sev_seg_driver DISPLAY (
+    .clk(clk),                      // Display multiplexer MUST run at 100MHz to avoid flicker
+    .reset(reset),
+    .display_data(debug_terminal),  // Overridden with current instruction
+    .an(an),
+    .seg(seg)
+);
 endmodule
